@@ -202,6 +202,7 @@ class MainActivity : ComponentActivity() {
     override fun onStart() {
         super.onStart()
         runtime.widgets.homeStarted()
+        runtime.appWidgets.startListening()
         runtime.screenStarted()
     }
 
@@ -220,6 +221,7 @@ class MainActivity : ComponentActivity() {
         // An app was just opened from home: it moves to the front of the strip now, out of sight.
         runtime.usage.settle()
         runtime.widgets.homeStopped()
+        runtime.appWidgets.stopListening()
         runtime.screenStopped()
     }
 

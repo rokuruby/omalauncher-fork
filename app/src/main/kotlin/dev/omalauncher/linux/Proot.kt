@@ -46,6 +46,7 @@ class Proot(
             "$GUEST_HOME/.config/omalauncher/home" to LauncherData.homeDir(context),
             "$GUEST_HOME/.config/omarchy/themes" to LauncherData.userThemesDir(context),
             "$GUEST_HOME/.config/omarchy/backgrounds" to LauncherData.userBackgroundsDir(context),
+            "/sdcard/Download" to File("/storage/emulated/0/Download"),
         )
 
     /**

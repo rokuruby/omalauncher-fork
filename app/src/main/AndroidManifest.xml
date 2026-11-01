@@ -13,6 +13,7 @@
 
     <!-- Uninstall from the app drawer's long-press menu (ACTION_DELETE). -->
     <uses-permission android:name="android.permission.REQUEST_DELETE_PACKAGES" />
+    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
 
     <uses-feature
         android:name="android.software.live_wallpaper"
@@ -91,6 +92,16 @@
                 <action android:name="android.content.pm.action.CONFIRM_PIN_SHORTCUT" />
             </intent-filter>
         </activity>
+
+        <!-- Binds a widget from one of the phone's apps for home and shows its settings (AddWidgetActivity.kt); no window
+             of its own. Its own task, like PinShortcutActivity's. -->
+        <activity
+            android:name=".AddWidgetActivity"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|navigation|density|uiMode"
+            android:excludeFromRecents="true"
+            android:exported="false"
+            android:taskAffinity=""
+            android:theme="@style/Theme.Omalauncher.Dialog" />
 
         <activity
             android:name=".LinuxWindowActivity"
