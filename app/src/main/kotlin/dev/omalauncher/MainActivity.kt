@@ -6,6 +6,11 @@ import android.app.role.RoleManager
 import android.content.Intent
 import android.content.Context
 import android.os.Bundle
+import android.provider.Settings
+import android.os.Environment
+import android.os.Build
+import android.net.Uri
+import android.content.ActivityNotFoundException
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.derivedStateOf
@@ -41,6 +46,8 @@ import dev.omalauncher.ui.PromptRequest
 import dev.omalauncher.widgets.market.Share
 
 /** The home screen: widgets, pinned apps and the drawer; Linux windows open as their own tasks. */
+private var allFilesAsked = false
+
 class MainActivity : ComponentActivity() {
     private val runtime get() = (application as App).runtime
     private val state = LauncherState()
@@ -63,6 +70,7 @@ class MainActivity : ComponentActivity() {
         }
         applySystemBars(this, Palette.isLight)
         runtime.start()
+        askForAllFiles()
         state.onSettings = { page, homePage -> runtime.openSettings(page, homePage) }
         setContent {
             KeyIndicated { LauncherRoot(runtime, state) }
@@ -122,6 +130,17 @@ class MainActivity : ComponentActivity() {
                 ?: data?.takeIf { it.host == Share.HOST && it.path.orEmpty().startsWith(Share.PATH) }?.toString()
                 ?: return
         state.shared = link
+    }
+
+    /** Opens Android's All files access page, once a launch until it's on: Linux's /sdcard/Download lists no files without it. */
+    private fun askForAllFiles() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R || allFilesAsked || Environment.isExternalStorageManager()) return
+        allFilesAsked = true
+        try {
+            startActivity(Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION, Uri.parse("package:$packageName")))
+        } catch (e: ActivityNotFoundException) {
+            startActivity(Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION))
+        }
     }
 
     override fun onResume() {
