@@ -279,7 +279,7 @@ fun <T> ChoicePopup(
     onPick: (T) -> Unit,
     label: (T) -> String,
     minWidth: Dp = 180.dp,
-    sublabel: ((T) -> String)? = null,
+    sublabel: ((T) -> String?)? = null,
     footer: @Composable ColumnScope.() -> Unit = {},
 ) {
     Popup(popupPositionProvider = position, onDismissRequest = onDismiss, properties = PopupProperties(focusable = true)) {
@@ -309,7 +309,7 @@ fun <T> ChoicePopup(
                     BasicText(if (current) "● " else "  ", style = Mono.copy(color = Palette.accent))
                     Column(Modifier.weight(1f)) {
                         BasicText(label(option), style = Mono.copy(color = if (current) Palette.accent else Palette.foreground))
-                        sublabel?.let { BasicText(it(option), style = Mono.copy(color = Palette.muted, fontSize = TextSize.Small)) }
+                        sublabel?.invoke(option)?.let { BasicText(it, style = Mono.copy(color = Palette.muted, fontSize = TextSize.Small)) }
                     }
                 }
             }
@@ -412,9 +412,10 @@ fun JobLog(
         } else {
             // A failure's reason is usually at the end of the line: let it wrap.
             for (line in log.takeLast(4)) BasicText(line, style = style, maxLines = if (state is JobState.Failed) 3 else 1, overflow = TextOverflow.Ellipsis)
-            if (log.size > 4 || state is JobState.Failed) BasicText(toggle, style = Mono.copy(color = Palette.muted, fontSize = TextSize.Small))
         }
     }
+    // A button, not one more line of the log.
+    if (!expanded && (log.size > 4 || state is JobState.Failed)) BracketAction(toggle, Palette.accent) { expanded = true }
     if (expanded) {
         val context = LocalContext.current
         Row {

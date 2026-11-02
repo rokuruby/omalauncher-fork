@@ -73,7 +73,7 @@
     <!-- Above the last lines of a Linux job that failed. -->
     <string name="home_job_failed">failed:</string>
     <!-- Under the last lines of a Linux job: opens all of it, closes it again, copies it. -->
-    <string name="home_job_whole_log">tap for the whole log</string>
+    <string name="home_job_whole_log">whole log</string>
     <string name="home_job_less">less</string>
     <string name="home_job_copy">copy</string>
     <!-- Screen reader label of the gear that opens settings. -->
@@ -86,4 +86,10 @@
     <string name="drawer_action_pin">add to home</string>
     <string name="drawer_action_info">app info</string>
     <string name="drawer_action_uninstall">uninstall</string>
+    <string name="home_widgets">widgets</string>
+    <string name="home_widget_settings">settings</string>
+    <string name="widget_app_gone">its app is gone</string>
+    <string name="widget_find">find a widget</string>
+    <string name="widget_none_offered">no app on this phone offers a widget</string>
+    <string name="widget_no_match">no widget matches</string>
 </resources>

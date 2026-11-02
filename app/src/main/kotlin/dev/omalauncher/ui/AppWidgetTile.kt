@@ -1,5 +1,7 @@
 package dev.omalauncher.ui
 
+import dev.omalauncher.R
+import androidx.compose.ui.res.stringResource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -47,7 +49,7 @@ internal fun AppWidgetTile(
         Box(modifier.tile(focused).padding(8.dp), contentAlignment = Alignment.Center) {
             Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 BasicText(widget.label, style = Mono.copy(textAlign = TextAlign.Center))
-                BasicText("its app is gone", style = Mono.copy(color = Palette.muted, fontSize = TextSize.Small, textAlign = TextAlign.Center))
+                BasicText(stringResource(R.string.widget_app_gone), style = Mono.copy(color = Palette.muted, fontSize = TextSize.Small, textAlign = TextAlign.Center))
             }
         }
         return

@@ -51,7 +51,7 @@
     <string name="home_refresh">muat ulang</string>
     <string name="home_refreshing">memuat ulang</string>
     <string name="home_job_failed">gagal:</string>
-    <string name="home_job_whole_log">ketuk untuk log lengkap</string>
+    <string name="home_job_whole_log">log lengkap</string>
     <string name="home_job_less">ringkas</string>
     <string name="home_job_copy">salin</string>
     <string name="home_settings">setelan</string>
@@ -61,4 +61,10 @@
     <string name="drawer_action_pin">tambah ke layar utama</string>
     <string name="drawer_action_info">info aplikasi</string>
     <string name="drawer_action_uninstall">uninstal</string>
+    <string name="home_widgets">widget</string>
+    <string name="home_widget_settings">setelan</string>
+    <string name="widget_app_gone">aplikasinya sudah hilang</string>
+    <string name="widget_find">cari widget</string>
+    <string name="widget_none_offered">tidak ada aplikasi yang menawarkan widget</string>
+    <string name="widget_no_match">tidak ada widget yang cocok</string>
 </resources>

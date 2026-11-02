@@ -9,6 +9,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.Spring
@@ -34,12 +35,14 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -61,6 +64,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
@@ -77,11 +81,14 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.rotate
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.key.Key
@@ -93,10 +100,12 @@ import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -104,16 +113,21 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.unit.max as maxDp
+import androidx.compose.ui.unit.min as minDp
+import dev.omalauncher.AppLanguage
 import dev.omalauncher.R
+import dev.omalauncher.linux.LinuxState
+import dev.omalauncher.linux.JobState
 import dev.omalauncher.Runtime
 import dev.omalauncher.voice.VoiceSession
 import dev.omalauncher.voice.VoiceSession.Phase
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
-import kotlin.math.PI
+import java.util.Locale
+import kotlin.math.max
 import kotlin.math.min
-import kotlin.math.sin
 
 /**
  * The voice screen: a spoken conversation with a coding agent ([VoiceSession]). It listens as it opens; a tap on
@@ -134,10 +148,11 @@ fun VoiceScreen(
     val context = LocalContext.current
     val session = runtime.voice
     val speaker = runtime.speaker
-    val speech = remember { Speech(context.applicationContext) }
+    val speech = remember { Speech(context.applicationContext) { speaker.locale } }
     val haptics = LocalHapticFeedback.current
     var viewing by remember { mutableStateOf<String?>(null) }
     var picking by remember { mutableStateOf(false) }
+    var tuning by remember { mutableStateOf(false) }
     var showSteps by remember { mutableStateOf(false) }
     var draft by remember { mutableStateOf("") }
     var bottomHeight by remember { mutableIntStateOf(0) }
@@ -220,7 +235,10 @@ fun VoiceScreen(
             addAll(session.transcript.asReversed())
         }
     val talking = items.isNotEmpty()
-    val ready = session.agent != null && (canHear || typing)
+    // An agent picked that isn't installed yet has the screen: the one before (and its conversation) is left.
+    val installing = session.installing
+    val linux by runtime.bootstrap.state.collectAsState()
+    val ready = session.agent != null && installing == null && (canHear || typing)
     val yellow = Palette.named("yellow") ?: Palette.accent
     // Landscape: the orb at the side and the conversation next to it. Asked of the window, not of the space left:
     // the keyboard coming up mustn't turn a phone held upright into landscape.
@@ -229,10 +247,14 @@ fun VoiceScreen(
     Box(Modifier.fillMaxSize().background(Palette.background).safeDrawingPadding()) {
         Column(Modifier.fillMaxSize()) {
             // Who it talks to (a tap picks another), and what holds for the whole conversation.
-            Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+            // As high with the buttons as without them (an install, no agent): the name doesn't move.
+            Row(Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(horizontal = 8.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
                 Box(Modifier.weight(1f)) {
-                    val many = session.voiceAgents.size > 1
-                    val name = session.agent?.name ?: stringResource(R.string.activity_voice)
+                    // With Linux there, every agent Voice talks to: picking one that isn't installed installs it.
+                    val options = if (linux == LinuxState.Installed) session.linked else session.voiceAgents
+                    val installed = session.voiceAgents
+                    val many = options.size > 1
+                    val name = (installing ?: session.agent)?.name ?: stringResource(R.string.activity_voice)
                     val pickable = many && !session.busy && !speech.listening
                     BasicText(
                         if (many) "$name ▾" else name,
@@ -246,17 +268,31 @@ fun VoiceScreen(
                         overflow = TextOverflow.Ellipsis,
                     )
                     if (picking) {
+                        val install = stringResource(R.string.agents_install)
+                        val installingNow = stringResource(R.string.linux_job_installing) + "…"
                         ChoicePopup(
-                            options = session.voiceAgents,
-                            selected = session.agent,
+                            options = options,
+                            selected = installing ?: session.agent,
                             position = BelowAnchorStart,
                             onDismiss = { picking = false },
                             onPick = {
                                 speaker.stop()
-                                session.switchTo(it)
+                                if (it in installed) {
+                                    session.switchTo(it)
+                                } else {
+                                    speech.cancel()
+                                    session.install(it)
+                                }
                             },
                             label = { it.name },
                             minWidth = 160.dp,
+                            sublabel = { agent ->
+                                when {
+                                    agent in installed -> null
+                                    runtime.agents.states[agent.bin] is JobState.Working -> installingNow
+                                    else -> install
+                                }
+                            },
                         )
                     }
                 }
@@ -264,7 +300,7 @@ fun VoiceScreen(
                 // A new conversation puts this one aside, so one tap is enough: resume brings it back.
                 if (ready && !session.busy) {
                     if (session.transcript.isNotEmpty()) {
-                        Chip(stringResource(R.string.voice_new), Palette.muted) {
+                        TopIcon(Icons.Plus, stringResource(R.string.voice_new)) {
                             speaker.stop()
                             session.startOver()
                         }
@@ -275,9 +311,32 @@ fun VoiceScreen(
                         }
                     }
                 }
+                // The language, voice and speed, last in the row.
+                if (ready) {
+                    TopIcon(Icons.Gear, stringResource(R.string.voice_voice)) {
+                        // Not listening while samples play: it would hear them.
+                        speech.cancel()
+                        tuning = true
+                    }
+                }
             }
 
-            if (!canHear && !typing && session.agent != null) {
+            if (installing != null) {
+                // Its install, in the middle, then a retry if it failed.
+                val state = session.installState
+                Column(
+                    Modifier.weight(1f).fillMaxWidth().padding(24.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterVertically),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    Box(Modifier.size(56.dp), contentAlignment = Alignment.Center) { VoiceIcon(Palette.muted) }
+                    Column(Modifier.widthIn(max = CONVERSATION)) {
+                        if (state is JobState.Working) BasicText("${stringResource(state.action)}…", style = Mono.copy(color = Palette.accent))
+                        JobLog(state)
+                        if (state is JobState.Failed) BracketAction(stringResource(R.string.home_retry), Palette.accent) { session.install(installing) }
+                    }
+                }
+            } else if (!canHear && !typing && session.agent != null) {
                 Missing(Modifier.weight(1f).fillMaxWidth(), stringResource(R.string.voice_no_speech), stringResource(R.string.voice_input_settings), stringResource(R.string.voice_type) to { switchTyping() }) {
                     val settings = Intent(Settings.ACTION_VOICE_INPUT_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                     runCatching { context.startActivity(settings) }.onFailure { context.startActivity(Intent(Settings.ACTION_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
@@ -290,12 +349,20 @@ fun VoiceScreen(
                     val most = if (typing) 96f else 250f
                     val orb = (if (wide) min(min((maxHeight - CAPTION).value * 0.8f, maxWidth.value * 0.36f), most) else min(min(maxWidth.value * 0.62f, maxHeight.value * 0.42f), most)).dp
                     val unit = orb + CAPTION
+                    // The conversation no wider than reads well (a tablet), beside the orb in landscape, the two
+                    // centred together; its own 16dp padding is the gap to the orb and the edge.
+                    val list = minDp(maxWidth - if (wide) orb + 32.dp else 0.dp, CONVERSATION)
+                    val left = if (wide) maxDp(16.dp, (maxWidth - orb - 16.dp - list) / 2) else 0.dp
                     // In the middle until there's a conversation, then above it (beside it in landscape).
                     val orbTop by animateDpAsState(if (talking && !wide) 0.dp else ((maxHeight - unit) / 2).coerceAtLeast(0.dp), spring(dampingRatio = 0.8f, stiffness = Spring.StiffnessLow), label = "orb")
-                    val orbStart by animateDpAsState(if (talking && wide) 16.dp else (maxWidth - orb) / 2, spring(dampingRatio = 0.8f, stiffness = Spring.StiffnessLow), label = "orbX")
+                    val orbStart by animateDpAsState(if (talking && wide) left else (maxWidth - orb) / 2, spring(dampingRatio = 0.8f, stiffness = Spring.StiffnessLow), label = "orbX")
                     if (talking) {
                         LazyColumn(
-                            Modifier.fillMaxSize().padding(top = if (wide) 0.dp else unit, start = if (wide) orb + 32.dp else 0.dp),
+                            Modifier
+                                .fillMaxHeight()
+                                .padding(top = if (wide) 0.dp else unit)
+                                .then(if (wide) Modifier.offset(x = left + orb + 16.dp) else Modifier.align(Alignment.TopCenter))
+                                .width(list),
                             reverseLayout = true,
                             // At the bottom, by the controls, while it's short.
                             verticalArrangement = Arrangement.spacedBy(10.dp, Alignment.Bottom),
@@ -304,14 +371,16 @@ fun VoiceScreen(
                             items(items.size) { i -> Message(items[i]) { viewing = it } }
                         }
                     }
+                    val touch = remember { MutableInteractionSource() }
+                    val pressed by touch.collectIsPressedAsState()
                     Column(
                         Modifier
                             .offset { IntOffset(orbStart.roundToPx(), orbTop.roundToPx()) }
                             .width(orb)
-                            .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null, enabled = !typing) { talk() },
+                            .clickable(interactionSource = touch, indication = null, enabled = !typing) { talk() },
                         horizontalAlignment = Alignment.CenterHorizontally,
                     ) {
-                        Orb(session = session, speech = speech, speaking = speaker.speaking, modifier = Modifier.size(orb))
+                        Orb(session = session, speech = speech, speaking = speaker.speaking, pressed = pressed, modifier = Modifier.size(orb))
                         // Up into the orb's box: it's drawn smaller than its box until it listens, and the ring
                         // stays clear of this even then.
                         Box(Modifier.height(CAPTION).offset(y = -orb * 0.1f), contentAlignment = Alignment.TopCenter) {
@@ -343,6 +412,15 @@ fun VoiceScreen(
                     val trouble = session.notice ?: speech.error
                     val silent = if (!typing) speaker.problem else null
                     (trouble ?: silent)?.let { BasicText(it, Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp), style = Mono.copy(color = if (trouble != null) Palette.red else Palette.muted, fontSize = TextSize.Small)) }
+                    // Not signed in: the agent in its own terminal, which walks through it.
+                    val agent = session.agent
+                    if (agent != null && session.notice != null && session.needsLogin) {
+                        BracketAction(stringResource(R.string.voice_log_in), Palette.accent, Modifier.padding(start = 8.dp)) {
+                            speech.cancel()
+                            session.loggingIn()
+                            runtime.terminal(agent.command, agent.name, agent)
+                        }
+                    }
 
                     val stoppable = session.busy || (!typing && speaker.speaking)
                     fun stop() {
@@ -432,11 +510,162 @@ fun VoiceScreen(
 
         // A picture, whole: pinch to zoom, tap to close.
         viewing?.let { path -> ImageViewer(path) { viewing = null } }
+        if (tuning) {
+            VoiceSettings(session, speaker) {
+                tuning = false
+                speaker.stop()
+            }
+        }
     }
 }
 
+/**
+ * The language Voice listens and reads aloud in, the voice it reads in and how fast: each pick plays a sample. The
+ * languages are the text-to-speech engine's (and the launcher's), the voices its own for the language picked.
+ */
+@Composable
+private fun VoiceSettings(
+    session: VoiceSession,
+    speaker: Speaker,
+    onDismiss: () -> Unit,
+) {
+    val context = LocalContext.current
+    val configuration = LocalConfiguration.current
+    val resources = LocalResources.current
+    LaunchedEffect(Unit) { speaker.warmUp() }
+    // Read again once the engine is up: before, it can't say what it has.
+    val ready = speaker.ready
+    val language = session.language
+    val launcher = configuration.locales[0]
+    val shown = language ?: launcher.language
+    val languages =
+        remember(ready) {
+            (speaker.languages() + AppLanguage.supported.map { Locale.forLanguageTag(it).language })
+                .distinct()
+                .sortedBy { AppLanguage.name(it).lowercase(launcher) }
+        }
+    val voices = remember(ready, shown) { speaker.voices(shown) }
+
+    /** A sentence in the language replies are read in: its own words when the launcher has them, else its name. */
+    fun sample() {
+        val locale = speaker.locale
+        val text = AppLanguage.stringIn(context, locale, R.string.voice_sample) ?: AppLanguage.name(locale.toLanguageTag())
+        speaker.stop()
+        speaker.speak(text)
+    }
+
+    fun use(
+        language: String? = session.language,
+        voice: String? = session.voice,
+        rate: Float = session.rate,
+    ) {
+        session.useVoice(language, voice, rate)
+        sample()
+    }
+
+    DialogFrame(onDismiss) {
+        BasicText(stringResource(R.string.voice_voice), style = Mono.copy(color = Palette.accent, fontSize = TextSize.Title))
+
+        var pickLanguage by remember { mutableStateOf(false) }
+        Setting(stringResource(R.string.voice_language)) {
+            Box {
+                Pick(if (language == null) stringResource(R.string.voice_language_launcher, AppLanguage.name(launcher.language)) else AppLanguage.name(language)) { pickLanguage = true }
+                if (pickLanguage) {
+                    ChoicePopup(
+                        options = listOf<String?>(null) + languages,
+                        selected = language,
+                        position = BelowAnchorStart,
+                        onDismiss = { pickLanguage = false },
+                        // Another language's voices are other voices.
+                        onPick = { use(language = it, voice = null) },
+                        label = { it?.let(AppLanguage::name) ?: resources.getString(R.string.voice_language_launcher, AppLanguage.name(launcher.language)) },
+                    )
+                }
+            }
+        }
+
+        if (voices.isNotEmpty()) {
+            var pickVoice by remember { mutableStateOf(false) }
+            // Numbered in each region: the engine's names (de-de-x-deb-local) say nothing to most. A voice and its
+            // online twin (de-de-x-deb-network) share the number.
+            val labels =
+                remember(voices) {
+                    val numbers = HashMap<String, Int>()
+                    val count = HashMap<String, Int>()
+                    voices.associate { v ->
+                        val region = v.locale.getDisplayCountry(launcher).ifEmpty { AppLanguage.name(v.locale.language) }
+                        val twin = region + "|" + v.name.substringAfter("-x-", v.name).substringBeforeLast('-')
+                        val n = numbers.getOrPut(twin) { (count[region] ?: 0).plus(1).also { count[region] = it } }
+                        v.name to (if (v.isNetworkConnectionRequired) "$region $n · ${resources.getString(R.string.voice_online)}" else "$region $n")
+                    }
+                }
+            val current = voices.firstOrNull { it.name == session.voice }
+            Setting(stringResource(R.string.voice_voice)) {
+                Box {
+                    Pick(current?.let { labels[it.name] } ?: stringResource(R.string.voice_default)) { pickVoice = true }
+                    if (pickVoice) {
+                        ChoicePopup(
+                            options = listOf<android.speech.tts.Voice?>(null) + voices,
+                            selected = current,
+                            position = BelowAnchorStart,
+                            onDismiss = { pickVoice = false },
+                            onPick = { use(voice = it?.name) },
+                            label = { v -> v?.let { labels[it.name] } ?: resources.getString(R.string.voice_default) },
+                            sublabel = { v -> v?.name.orEmpty() },
+                        )
+                    }
+                }
+            }
+        }
+
+        Setting(stringResource(R.string.voice_speed)) {
+            Row {
+                for (r in RATES) {
+                    Chip("${r.toString().removeSuffix(".0")}×", if (r == session.rate) Palette.accent else Palette.muted) { use(rate = r) }
+                }
+            }
+        }
+
+        if (!speaker.reads(speaker.locale)) {
+            BasicText(stringResource(R.string.voice_no_voice, AppLanguage.name(speaker.locale.language)), style = Mono.copy(color = Palette.red, fontSize = TextSize.Small))
+        }
+        // The engine, its voices' downloads and its own defaults. Back or a tap outside closes this.
+        BracketAction(stringResource(R.string.voice_tts_settings), Palette.accent) {
+            val settings = Intent("com.android.settings.TTS_SETTINGS").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            runCatching { context.startActivity(settings) }.onFailure { context.startActivity(Intent(Settings.ACTION_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
+        }
+    }
+}
+
+/** How fast replies can be read; 1 is the engine's normal speed. */
+private val RATES = listOf(0.8f, 1f, 1.25f, 1.5f)
+
+/** A setting in [VoiceSettings]: its name, and what it's set to. */
+@Composable
+private fun Setting(
+    name: String,
+    value: @Composable () -> Unit,
+) = Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+    BasicText(name, style = Mono.copy(color = Palette.muted, fontSize = TextSize.Small))
+    value()
+}
+
+/** What a setting is set to; a tap picks another. */
+@Composable
+private fun Pick(
+    text: String,
+    onClick: () -> Unit,
+) = BasicText(
+    "$text ▾",
+    Modifier.clip(LauncherStyle.shape(8.dp)).clickable(onClick = onClick).padding(vertical = 6.dp),
+    style = Mono.copy(color = Palette.foreground, fontSize = TextSize.Item),
+)
+
 /** The status line's room under the orb. */
 private val CAPTION = 28.dp
+
+/** The conversation's widest, its 16dp padding in: 560dp of text, as the approval card, a readable line on a tablet. */
+private val CONVERSATION = 592.dp
 
 /** One of the approval card's three answers, all the same size: [filled] for the one most taps want. */
 @Composable
@@ -493,6 +722,7 @@ private fun Orb(
     session: VoiceSession,
     speech: Speech,
     speaking: Boolean,
+    pressed: Boolean,
     modifier: Modifier,
 ) {
     val yellow = Palette.named("yellow") ?: Palette.accent
@@ -501,8 +731,8 @@ private fun Orb(
         when {
             speech.listening -> Palette.green
             waiting -> Palette.red
-            // Not the accent: on themes where it's red, speaking would look like waiting for an OK.
-            speaking -> Palette.named("blue") ?: Palette.accent
+            // The theme's accent, unless it's the red of waiting for an OK or the green of listening.
+            speaking -> Palette.accent.takeIf { it != Palette.red && it != Palette.green } ?: Palette.named("blue") ?: Palette.accent
             session.busy -> yellow
             else -> Palette.muted
         },
@@ -520,22 +750,52 @@ private fun Orb(
         spring(dampingRatio = 0.6f, stiffness = Spring.StiffnessMediumLow),
         label = "size",
     )
-    val loop = rememberInfiniteTransition(label = "orb")
-    val turn by loop.animateFloat(0f, 360f, infiniteRepeatable(tween(1600, easing = LinearEasing)), label = "turn")
-    val breath by loop.animateFloat(0f, 1f, infiniteRepeatable(tween(1400), RepeatMode.Reverse), label = "breath")
     val working = session.busy && !waiting
-    Canvas(modifier.graphicsLayer { scaleX = size; scaleY = size }) {
+    val active = speech.listening || speaking || session.busy || waiting
+    // Idle it's a hollow ring; anything going on fills it.
+    val fill by animateFloatAsState(if (active) 1f else 0f, tween(450), label = "fill")
+    // A finger on it: it gives a little and lights up at once, before the tap does anything.
+    val press by animateFloatAsState(if (pressed) 1f else 0f, spring(dampingRatio = 0.55f, stiffness = Spring.StiffnessMedium), label = "press")
+    val level by animateFloatAsState(if (speech.listening) speech.level else 0f, spring(stiffness = Spring.StiffnessMediumLow), label = "level")
+    val loop = rememberInfiniteTransition(label = "orb")
+    val turn by loop.animateFloat(0f, 360f, infiniteRepeatable(tween(1400, easing = LinearEasing)), label = "turn")
+    val breath by loop.animateFloat(0f, 1f, infiniteRepeatable(tween(1600, easing = FastOutSlowInEasing), RepeatMode.Reverse), label = "breath")
+    val ripple by loop.animateFloat(0f, 1f, infiniteRepeatable(tween(2400, easing = LinearEasing)), label = "ripple")
+    Canvas(modifier.graphicsLayer { scaleX = size * (1f - 0.07f * press); scaleY = size * (1f - 0.07f * press) }) {
+        val fill = max(fill, 0.45f * press)
         val c = Offset(this.size.width / 2, this.size.height / 2)
         val r = min(this.size.width, this.size.height) / 2 - 10.dp.toPx()
-        val pulse = if (speaking) 1f + 0.04f * sin(breath * PI.toFloat()) else 1f
-        drawCircle(color.copy(alpha = 0.10f), r * pulse, c)
-        drawCircle(Brush.radialGradient(listOf(color.copy(alpha = 0.65f), color.copy(alpha = 0.18f)), c, r * 0.82f * pulse), r * 0.82f * pulse, c)
-        drawCircle(color.copy(alpha = 0.9f), r * 0.82f * pulse, c, style = Stroke(2.dp.toPx()))
+        val swell = if (speaking || waiting) breath else 0f
+        val core = r * 0.72f * (1f + 0.035f * swell)
+        // A soft light around it, brighter as it speaks or listens louder.
+        val glow = 0.06f + fill * (0.14f + 0.10f * swell + 0.16f * level) + 0.10f * press
+        drawCircle(Brush.radialGradient(0.55f to color.copy(alpha = glow), 1f to Color.Transparent, center = c, radius = r), r, c)
+        // Listening: rings leave the core and fade, stronger the louder you are.
+        if (speech.listening) {
+            for (k in 0..1) {
+                val p = (ripple + k * 0.5f) % 1f
+                val a = (1f - p) * (1f - p) * (0.25f + 0.55f * level)
+                drawCircle(color.copy(alpha = a), core + (r - core) * p, c, style = Stroke(1.5.dp.toPx()))
+            }
+        }
+        // The core: lit from the top, a touch deeper at the bottom.
+        drawCircle(
+            Brush.linearGradient(listOf(lerp(color, Color.White, 0.22f), color, lerp(color, Color.Black, 0.14f)), Offset(c.x - core * 0.5f, c.y - core), Offset(c.x + core * 0.5f, c.y + core)),
+            core, c, alpha = fill,
+        )
+        drawCircle(color.copy(alpha = 0.05f * (1f - fill)), core, c)
+        drawCircle(color.copy(alpha = 1f - fill), core, c, style = Stroke(1.5.dp.toPx()))
+        // Working: one comet circling just outside, its tail fading away.
         if (working) {
-            val box = Size(r * 2, r * 2)
-            val at = Offset(c.x - r, c.y - r)
-            drawArc(yellow, turn - 90f, 70f, false, at, box, style = Stroke(4.dp.toPx(), cap = StrokeCap.Round))
-            drawArc(yellow.copy(alpha = 0.45f), turn + 90f, 70f, false, at, box, style = Stroke(4.dp.toPx(), cap = StrokeCap.Round))
+            val ring = r * 0.9f
+            rotate(turn, c) {
+                drawArc(
+                    // Starts past 0°, so the tail's round cap sits in the clear part, not where the sweep wraps to yellow.
+                    Brush.sweepGradient(0f to yellow.copy(alpha = 0f), 0.04f to yellow.copy(alpha = 0f), 0.72f to yellow, 0.75f to yellow, center = c),
+                    15f, 255f, false, Offset(c.x - ring, c.y - ring), Size(ring * 2, ring * 2),
+                    style = Stroke(2.5.dp.toPx(), cap = StrokeCap.Round),
+                )
+            }
         }
     }
 }
@@ -586,6 +846,17 @@ private fun rememberBitmap(
                 }.getOrNull()
             }
     }.value
+
+/** An icon in the top row that does something, [label] for screen readers. */
+@Composable
+private fun TopIcon(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    label: String,
+    onClick: () -> Unit,
+) = Box(
+    Modifier.size(44.dp).clip(LauncherStyle.shape(22.dp)).clickable(onClick = onClick),
+    contentAlignment = Alignment.Center,
+) { Image(icon, label, Modifier.size(24.dp), colorFilter = ColorFilter.tint(Palette.muted)) }
 
 /** A small word in the top row that does something. */
 @Composable

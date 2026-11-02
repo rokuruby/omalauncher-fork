@@ -1,5 +1,7 @@
 package dev.omalauncher.ui
 
+import dev.omalauncher.R
+import androidx.compose.ui.res.stringResource
 import android.appwidget.AppWidgetProviderInfo
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
@@ -70,12 +72,12 @@ internal fun WidgetPicker(
     val title = pick.packageName?.let { pkg -> groups.firstOrNull()?.second ?: appLabel(pkg) }?.let { "$it widgets" } ?: "android widgets"
     OverlayPanel(title, onDismiss, contentWidth = ReadingWidth) {
         if (pick.packageName == null) {
-            SearchField(query, { query = it }, onGo = {}, placeholder = "find a widget")
+            SearchField(query, { query = it }, onGo = {}, placeholder = stringResource(R.string.widget_find))
             Spacer(Modifier.height(12.dp))
         }
         LazyColumn(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             if (shown.isEmpty()) {
-                item { BasicText(if (groups.isEmpty()) "no app on this phone offers a widget" else "no widget matches", style = Mono.copy(color = Palette.muted)) }
+                item { BasicText(stringResource(if (groups.isEmpty()) R.string.widget_none_offered else R.string.widget_no_match), style = Mono.copy(color = Palette.muted)) }
             }
             for ((pkg, app, infos) in shown) {
                 // A single app's list says whose it is in its title.

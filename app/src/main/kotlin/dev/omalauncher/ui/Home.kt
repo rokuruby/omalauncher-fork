@@ -431,7 +431,7 @@ fun HomeScreen(
                         if (spec != null) EditAction(stringResource(R.string.home_edit)) { edit(spec) }
                         // A pinned app's own widgets, as its menu in the drawer offers them.
                         if (app != null && runtime.appWidgets.offers(app)) {
-                            EditAction("widgets") {
+                            EditAction(stringResource(R.string.home_widgets)) {
                                 state.editing = null
                                 state.pickingWidget = WidgetPick(app.component.packageName)
                             }
@@ -441,7 +441,7 @@ fun HomeScreen(
                             val activity = LocalContext.current as? android.app.Activity
                             val info = remember(item.id) { runtime.appWidgets.info(item.id) }
                             if (activity != null && info != null && runtime.appWidgets.reconfigurable(info)) {
-                                EditAction("settings") {
+                                EditAction(stringResource(R.string.home_widget_settings)) {
                                     state.editing = null
                                     runtime.appWidgets.configure(activity, item.id, requestCode = 0)
                                 }

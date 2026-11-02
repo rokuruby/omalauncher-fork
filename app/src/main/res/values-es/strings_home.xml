@@ -55,7 +55,7 @@
     <string name="home_refresh">actualizar</string>
     <string name="home_refreshing">actualizando</string>
     <string name="home_job_failed">falló:</string>
-    <string name="home_job_whole_log">toca para ver el registro completo</string>
+    <string name="home_job_whole_log">registro completo</string>
     <string name="home_job_less">menos</string>
     <string name="home_job_copy">copiar</string>
     <string name="home_settings">configuración</string>
@@ -65,4 +65,10 @@
     <string name="drawer_action_pin">agregar a inicio</string>
     <string name="drawer_action_info">info de la app</string>
     <string name="drawer_action_uninstall">desinstalar</string>
+    <string name="home_widgets">widgets</string>
+    <string name="home_widget_settings">ajustes</string>
+    <string name="widget_app_gone">su app ya no está</string>
+    <string name="widget_find">buscar un widget</string>
+    <string name="widget_none_offered">ninguna app ofrece widgets</string>
+    <string name="widget_no_match">ningún widget coincide</string>
 </resources>
