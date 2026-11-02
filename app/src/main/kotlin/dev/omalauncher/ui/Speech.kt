@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.res.Resources
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.icu.util.ULocale
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
@@ -154,7 +155,7 @@ class Speech(
      * The language to recognize: the [wanted] one, or the closest one the recognizer
      * has a model for. Recognizers only know common language-region pairs, so a
      * phone set to English (Germany) needs en-US or en-GB instead. Null for the
-     * recognizer's default; asked once for each kind of recognizer and language, see [languages].
+     * recognizer's default, see [unlisted]; asked once for each kind of recognizer and language, see [languages].
      */
     private var language: String?
         get() = languages[key]
@@ -179,7 +180,11 @@ class Speech(
         recognizer = r
         r.setRecognitionListener(Listener(r))
         Log.i(TAG, "listening with the ${if (onDevice && onDeviceAvailable) "on-device" else "regular"} recognizer")
-        if (key in languages || Build.VERSION.SDK_INT < 33) return begin(r)
+        if (key in languages) return begin(r)
+        if (Build.VERSION.SDK_INT < 33) {
+            language = unlisted()
+            return begin(r)
+        }
         pending = r
         // A Pixel took 16 seconds to answer, with an error, the first time: the words said meanwhile were lost.
         main.postDelayed({
@@ -197,7 +202,7 @@ class Speech(
                     override fun onSupportResult(support: RecognitionSupport) {
                         if (pending !== r) return
                         pending = null
-                        language = closestLanguage(support)
+                        language = closestLanguage(support) ?: unlisted()
                         Log.i(TAG, "recognizing ${language ?: "the default language"}")
                         begin(r)
                     }
@@ -264,41 +269,33 @@ class Speech(
                 }
             }
 
-    /**
-     * The phone's language-region if supported, else the same language in another
-     * region: installed models first, then the language's home region (de-DE),
-     * then en-US style defaults, then any.
-     */
     @androidx.annotation.RequiresApi(33)
     private fun closestLanguage(support: RecognitionSupport): String? {
         val locale = wanted()
-        val tag = Locale(locale.language, locale.country).toLanguageTag()
         val pools =
             if (onDevice) {
                 listOf(support.installedOnDeviceLanguages, support.supportedOnDeviceLanguages, support.onlineLanguages)
             } else {
                 listOf(support.onlineLanguages, support.installedOnDeviceLanguages, support.supportedOnDeviceLanguages)
             }
-        pools.flatten().firstOrNull { it.equals(tag, ignoreCase = true) }?.let { return it }
-        val home = "${locale.language}-${locale.language}"
-        for (pool in pools) {
-            val same = pool.filter { it.substringBefore('-').equals(locale.language, ignoreCase = true) }
-            same
-                .minByOrNull {
-                    when {
-                        it.equals(home, ignoreCase = true) -> 0
-                        it.endsWith("-US", ignoreCase = true) -> 1
-                        else -> 2
-                    }
-                }?.let { return it }
-        }
-        return null
+        return closestLanguage(locale.language, locale.country, mainRegion(), pools)
     }
 
-    /** The [wanted] language in its main region: en-US, de-DE, fr-FR. */
+    /** The [wanted] language in its main region: en-US, de-DE, ja-JP, zh-CN. */
     private fun mainRegion(): String {
-        val l = wanted().language
-        return if (l == "en") "en-US" else "$l-${l.uppercase(Locale.ROOT)}"
+        val l = spokenLanguage(wanted().language)
+        val region = ULocale.addLikelySubtags(ULocale(l)).country
+        return if (region.isEmpty()) l else "$l-$region"
+    }
+
+    /**
+     * The language to ask for when the recognizer doesn't list the [wanted] one, or can't list any: none for the
+     * phone's own, the recognizer's default. Any other has to be asked for, or a Chinese Voice on an English phone
+     * listens in English, without an error, and hears ni hao as Niihau.
+     */
+    private fun unlisted(): String? {
+        val phone = Resources.getSystem().configuration.locales[0]
+        return mainRegion().takeUnless { spokenLanguage(phone.language) == spokenLanguage(wanted().language) }
     }
 
     private fun finish() {
@@ -528,4 +525,39 @@ class Speech(
         /** The one started last: the phone has one microphone, and a second recognizer would get nothing. */
         private var active: Speech? = null
     }
+}
+
+/** [code] as a language: Mandarin's own code, which Google's recognizers list it under (cmn-Hans-CN), is zh. Cantonese, yue, stays apart. */
+internal fun spokenLanguage(code: String) = code.lowercase(Locale.ROOT).let { if (it == "cmn") "zh" else it }
+
+/**
+ * [language] in [region] if some recognizer in [pools] has it, else the same language in another region: earlier
+ * pools first (installed models, say), then its [main] language-region (de-DE), then en-US style defaults, then any.
+ * Null when none has the language.
+ */
+internal fun closestLanguage(
+    language: String,
+    region: String,
+    main: String,
+    pools: List<Collection<String>>,
+): String? {
+    val spoken = spokenLanguage(language)
+    val mainRegion = main.substringAfter('-', "")
+
+    fun regionOf(tag: String) = Locale.forLanguageTag(tag.replace('_', '-')).country
+
+    fun same(tag: String) = spokenLanguage(Locale.forLanguageTag(tag.replace('_', '-')).language) == spoken
+    pools.flatten().firstOrNull { same(it) && regionOf(it).equals(region, ignoreCase = true) }?.let { return it }
+    for (pool in pools) {
+        pool
+            .filter(::same)
+            .minByOrNull {
+                when {
+                    regionOf(it).equals(mainRegion, ignoreCase = true) -> 0
+                    regionOf(it).equals("US", ignoreCase = true) -> 1
+                    else -> 2
+                }
+            }?.let { return it }
+    }
+    return null
 }
