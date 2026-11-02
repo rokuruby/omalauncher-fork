@@ -47,4 +47,13 @@ class SpeechLanguageTest {
     @Test fun nullWhenNoRecognizerHasTheLanguage() {
         assertNull(closestLanguage("zh", "", "zh-CN", listOf(listOf("en-US"), emptyList())))
     }
+
+    @Test fun mandarinIsTriedUnderEverySpelling() {
+        assertEquals(listOf("zh-CN", "cmn-Hans-CN", "zh-Hans-CN", "zh"), languageTags("zh-CN"))
+    }
+
+    @Test fun otherLanguagesHaveTheirMainRegionThenTheLanguage() {
+        assertEquals(listOf("de-DE", "de"), languageTags("de-DE"))
+        assertEquals(listOf("xx"), languageTags("xx"))
+    }
 }

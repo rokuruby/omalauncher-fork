@@ -25,6 +25,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import dev.omalauncher.R
 import dev.omalauncher.SpeakNowActivity
+import java.io.File
+import java.util.Date
 import java.util.Locale
 
 /**
@@ -100,7 +102,7 @@ class Speech(
         text = ""
         listening = true
         retried = false
-        if (!onDeviceAvailable && regularService(context) == null) speakNow() else listen()
+        if ((!onDeviceAvailable && regularService(context) == null) || wanted().toLanguageTag() in speakNowOnly) speakNow() else listen()
     }
 
     /**
@@ -108,10 +110,11 @@ class Speech(
      * that, once, for what's said. Its screen has its own stop.
      */
     private fun speakNow() {
-        Log.i(TAG, "no recognizer service, opening the speak-now screen")
+        note("opening the speak-now screen for ${mainRegion()}")
         val me = this
         speakingNow = { heard ->
             if (active === me && listening) {
+                note("the speak-now screen heard ${heard?.length ?: 0} characters")
                 text = heard.orEmpty()
                 finish()
             }
@@ -179,7 +182,7 @@ class Speech(
             }
         recognizer = r
         r.setRecognitionListener(Listener(r))
-        Log.i(TAG, "listening with the ${if (onDevice && onDeviceAvailable) "on-device" else "regular"} recognizer")
+        note("listening with the ${if (onDevice && onDeviceAvailable) "on-device" else "regular (${regularService(context)?.flattenToShortString()})"} recognizer")
         if (key in languages) return begin(r)
         if (Build.VERSION.SDK_INT < 33) {
             language = unlisted()
@@ -191,7 +194,7 @@ class Speech(
             if (pending !== r) return@postDelayed
             pending = null
             language = mainRegion()
-            Log.i(TAG, "no languages after ${SUPPORT_WAIT_MS}ms, recognizing $language")
+            note("no languages after ${SUPPORT_WAIT_MS}ms, recognizing $language")
             begin(r)
         }, SUPPORT_WAIT_MS)
         guarded {
@@ -203,7 +206,7 @@ class Speech(
                         if (pending !== r) return
                         pending = null
                         language = closestLanguage(support) ?: unlisted()
-                        Log.i(TAG, "recognizing ${language ?: "the default language"}")
+                        note("online ${support.onlineLanguages}, installed ${support.installedOnDeviceLanguages}, on-device ${support.supportedOnDeviceLanguages}: recognizing ${language ?: "the default language"}")
                         begin(r)
                     }
 
@@ -213,7 +216,7 @@ class Speech(
                         if (pending !== r) return
                         pending = null
                         language = mainRegion()
-                        Log.i(TAG, "no languages ($error), recognizing $language")
+                        note("no languages ($error), recognizing $language")
                         begin(r)
                     }
                 },
@@ -359,27 +362,39 @@ class Speech(
                     if (held) next() else finish()
                 }
                 // The phone's language-region (en-DE) may be unknown to a recognizer that can't say which it knows: the
-                // language's main region next, kept for later. A language that's known but not downloaded (13), online
-                // next, kept for later too. Then the other recognizer, whose languages are its own. Not asking the
+                // language's main region next, kept for later. Speech Services may refuse a language it has no offline
+                // model for either way, not downloaded (13) or not supported (12): online next, kept for later too. Then
+                // the language's other spellings, cmn-Hans-CN for zh-CN, and the other recognizer, whose languages are
+                // its own. Last the phone's speak-now screen, which can have languages its services refuse. Not asking the
                 // on-device one to fetch its model: that's a system dialog over the screen, mid-sentence, for 60 MB.
                 SpeechRecognizer.ERROR_LANGUAGE_NOT_SUPPORTED, SpeechRecognizer.ERROR_LANGUAGE_UNAVAILABLE -> {
-                    val main = mainRegion()
+                    val tags: List<String?> = languageTags(mainRegion())
                     val unavailable = code == SpeechRecognizer.ERROR_LANGUAGE_UNAVAILABLE
+                    val spelling = tags.getOrNull(tags.indexOf(language) + 1)
+                    note("error $code for ${language ?: "the default language"}, on-device $onDevice, online ${key in online}")
                     when {
-                        language != main -> {
-                            Log.i(TAG, "${language ?: "the default language"} isn't known, recognizing $main")
-                            language = main
+                        language !in tags -> {
+                            language = tags.first()
                             next()
                         }
-                        unavailable && !onDevice && key !in online -> {
-                            Log.i(TAG, "no offline model for $main, recognizing online")
+                        !onDevice && key !in online -> {
                             online += key
+                            language = tags.first()
+                            next()
+                        }
+                        !unavailable && spelling != null -> {
+                            language = spelling
                             next()
                         }
                         onDevice && regularService(context) != null -> {
-                            Log.i(TAG, "no on-device model for $main, using the regular recognizer")
                             onDevice = false
                             listen()
+                        }
+                        canSpeakNow(context) -> {
+                            speakNowOnly += wanted().toLanguageTag()
+                            recognizer?.destroy()
+                            recognizer = null
+                            speakNow()
                         }
                         unavailable -> fail(code, R.string.prompt_speech_not_downloaded)
                         else -> fail(code, R.string.prompt_speech_language)
@@ -396,7 +411,7 @@ class Speech(
             code: Int,
             @StringRes message: Int,
         ) {
-            Log.w(TAG, "speech recognition failed ($code)")
+            note("speech recognition failed ($code)")
             // Keep what was already recognized; the error is only worth showing when there's nothing.
             if (text.isBlank()) error = context.getString(message, code)
             finish()
@@ -522,6 +537,17 @@ class Speech(
         /** Languages, for each kind of recognizer, that Speech Services has no offline model for: recognized online. */
         private val online = HashSet<Pair<Boolean, String>>()
 
+        /** Languages no recognizer service took: straight to the speak-now screen, until the launcher restarts. */
+        private val speakNowOnly = HashSet<String>()
+
+        /** Logs [message], and keeps it where Linux can read it, as a phone has no logcat to hand: the fork's own. */
+        private fun note(message: String) {
+            Log.i(TAG, message)
+            runCatching { File(TRACE).appendText("${Date()} $message\n") }
+        }
+
+        private const val TRACE = "/storage/emulated/0/Download/omalauncher/voice-speech.log"
+
         /** The one started last: the phone has one microphone, and a second recognizer would get nothing. */
         private var active: Speech? = null
     }
@@ -529,6 +555,14 @@ class Speech(
 
 /** [code] as a language: Mandarin's own code, which Google's recognizers list it under (cmn-Hans-CN), is zh. Cantonese, yue, stays apart. */
 internal fun spokenLanguage(code: String) = code.lowercase(Locale.ROOT).let { if (it == "cmn") "zh" else it }
+
+/** The tags to try for a language whose recognizer won't say which it knows, [main] (zh-CN) first: Google's lists Mandarin as cmn-Hans-CN. */
+internal fun languageTags(main: String): List<String> {
+    val language = main.substringBefore('-')
+    val region = main.substringAfter('-', "")
+    val mandarin = if (language == "zh" && region.isNotEmpty()) listOf("cmn-Hans-$region", "zh-Hans-$region") else emptyList()
+    return (listOf(main) + mandarin + language).distinct()
+}
 
 /**
  * [language] in [region] if some recognizer in [pools] has it, else the same language in another region: earlier
