@@ -3,6 +3,7 @@ package dev.omalauncher.local
 import android.util.Log
 import com.google.ai.edge.litertlm.Content
 import com.google.ai.edge.litertlm.Contents
+import com.google.ai.edge.litertlm.Conversation
 import com.google.ai.edge.litertlm.ConversationConfig
 import com.google.ai.edge.litertlm.Message
 import com.google.ai.edge.litertlm.MessageCallback
@@ -23,6 +24,7 @@ import java.security.MessageDigest
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 
 /**
  * The launcher's Gemma for Linux: an OpenAI-compatible server on 127.0.0.1:[Gemma.PORT], like `litert-lm serve`, with
@@ -68,7 +70,7 @@ class OpenAiServer(
             method == "POST" && (path == "/v1/chat/completions" || path == "/chat/completions") -> {
                 val body = readBody(input, headers)
                 val req = runCatching { JSONObject(body.toString(Charsets.UTF_8)) }.getOrElse { return respond(out, 400, problem("the body isn't JSON")) }
-                chat(req, out)
+                chat(req, input, out)
             }
             method == "OPTIONS" -> respond(out, 204, null)
             else -> respond(out, 404, problem("no $method $path here"))
@@ -79,6 +81,7 @@ class OpenAiServer(
 
     private fun chat(
         req: JSONObject,
+        input: InputStream,
         out: OutputStream,
     ) {
         if (!model.present) {
@@ -96,8 +99,22 @@ class OpenAiServer(
         var chunks = 0
         var failure: Throwable? = null
         var total = 0
+        // The client hanging up (a reply cancelled in OpenCode, a timeout) stops the work for it: otherwise the
+        // model goes on answering no one, and every request after it waits its turn behind that.
+        val gone = AtomicBoolean(false)
+        val finished = AtomicBoolean(false)
+        val active = AtomicReference<Conversation?>(null)
+        Thread({
+            runCatching { while (input.read() >= 0) Unit }
+            if (!finished.get()) {
+                gone.set(true)
+                active.get()?.let { c -> runCatching { c.cancelProcess() } }
+            }
+        }, "gemma-watch").apply { isDaemon = true }.start()
         model.runCatching {
             turn { engine ->
+                // Gone while it waited for the request before it: nothing to do.
+                if (gone.get()) return@turn Unit
                 val config =
                     ConversationConfig(
                         systemInstruction = chat.system.takeIf { it.isNotBlank() }?.let { Contents.of(it) },
@@ -109,7 +126,12 @@ class OpenAiServer(
                 val oneShot = chat.context.isEmpty() && chat.tools.isEmpty()
                 val conv = if (oneShot) scratch(engine, config) else conversation(engine, chat.contextKey) { config }.first
                 val done = CountDownLatch(1)
-                val gone = AtomicBoolean(false)
+                active.set(conv)
+                if (gone.get()) {
+                    active.set(null)
+                    if (oneShot) runCatching { conv.close() } else drop()
+                    return@turn Unit
+                }
                 conv.sendMessageAsync(
                     chat.prompt.message,
                     object : MessageCallback {
@@ -136,6 +158,7 @@ class OpenAiServer(
                     maxOutputToken = chat.maxTokens,
                 )
                 done.await()
+                active.set(null)
                 total = runCatching { conv.getTokenCount() }.getOrDefault(0)
                 when {
                     oneShot -> runCatching { conv.close() }
@@ -144,6 +167,8 @@ class OpenAiServer(
                 }
             }
         }.onFailure { failure = it }
+        finished.set(true)
+        if (gone.get()) return
 
         val finish = if (calls.isNotEmpty()) "tool_calls" else "stop"
         val toolCalls =
