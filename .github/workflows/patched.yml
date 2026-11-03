@@ -51,7 +51,7 @@ jobs:
       - name: Name the APK
         run: |
           version=$(sed -n 's/.*versionName = "\(.*\)".*/\1/p' app/build.gradle.kts)
-          name="omalauncher-$version-androidwidgets-fileaccess-chinesevoice-localgemma4"
+          name="omalauncher-$version-androidwidgets-fileaccess-chinesevoice-localgemma4-gpufallback"
           mv app/build/outputs/apk/release/app-release.apk "$name.apk"
           echo "APK_NAME=$name" >> "$GITHUB_ENV"
 
