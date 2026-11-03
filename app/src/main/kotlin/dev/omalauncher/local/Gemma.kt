@@ -51,8 +51,38 @@ object Gemma {
                     .put("name", "On this phone")
                     .put("options", JSONObject().put("baseURL", "http://127.0.0.1:$PORT/v1").put("apiKey", "local"))
                     .put("models", JSONObject().put(MODEL_ID, model))
-            return JSONObject().put("provider", JSONObject().put("litert", provider)).put("model", "litert/$MODEL_ID").toString()
+            // OpenCode's own agent sends ~19,500 characters of instructions and a dozen tools: ~30 s of reading on
+            // the phone's GPU, and long enough that Gemma garbles its tool calls. Its own agent with short
+            // instructions and five tools answers in seconds; no separate request for the session's title.
+            val tools = JSONObject()
+            for (t in OFF_TOOLS) tools.put(t, false)
+            for (t in ON_TOOLS) tools.put(t, true)
+            val agent = JSONObject().put("mode", "primary").put("description", "Gemma on this phone").put("prompt", AGENT_PROMPT).put("tools", tools)
+            val agents = JSONObject().put("gemma", agent).put("title", JSONObject().put("disable", true))
+            return JSONObject()
+                .put("provider", JSONObject().put("litert", provider))
+                .put("model", "litert/$MODEL_ID")
+                .put("default_agent", "gemma")
+                .put("agent", agents)
+                .toString()
         }
+
+    /** gemma-code's instructions: short, as every word is read on the phone before each new session. */
+    private const val AGENT_PROMPT =
+        "You are a coding assistant running on the user's phone, in a Linux terminal. Use the tools to read, write and edit " +
+            "files and to run shell commands. Call one tool at a time and wait for its result. Keep answers short and plain. " +
+            "Before changing or deleting anything important, say what you will do."
+
+    private val ON_TOOLS = listOf("read", "write", "edit", "shell", "glob")
+
+    /** OpenCode's other tools, each a description Gemma would read for nothing. */
+    private val OFF_TOOLS =
+        listOf(
+            "question", "skill", "subagent", "webfetch", "websearch", "execute", "grep", "todowrite", "todoread", "task", "list",
+            "patch", "bash", "lsp", "opencode_list_mcp_resources", "opencode_models", "opencode_read_mcp_resource",
+            "opencode_session_move", "opencode_session_rename", "opencode_worktree_create", "opencode_worktree_list",
+            "opencode_worktree_remove",
+        )
 
     /** Downloads the model in the guest, resuming a cut download, saying how far it got every few seconds. */
     val downloadScript: String

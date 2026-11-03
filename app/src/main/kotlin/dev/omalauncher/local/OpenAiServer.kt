@@ -164,11 +164,22 @@ class OpenAiServer(
                 .put("prompt_tokens", (total - completion).coerceAtLeast(0))
                 .put("completion_tokens", completion)
                 .put("total_tokens", total)
+        // A tool call Gemma garbled: LiteRT-LM fails the turn, and OpenCode would send it all again, minutes of
+        // retries. Its words go back as the answer instead, so the agent sees them and can try another way.
+        var recovered = false
+        failure?.message?.let { m -> Regex("full response: (.*?)(\nerror:|$)", RegexOption.DOT_MATCHES_ALL).find(m) }?.let {
+            if (text.isEmpty() && calls.isEmpty()) {
+                text.append("(My tool call was malformed, so it didn't run.) ").append(it.groupValues[1].trim())
+                failure = null
+                recovered = true
+            }
+        }
         val err = failure
         if (sink != null) {
             if (err != null && text.isEmpty() && calls.isEmpty()) {
                 sink.error(err.message ?: err.toString())
             } else {
+                if (recovered) sink.text(text.toString())
                 if (toolCalls.length() > 0) sink.delta(JSONObject().put("tool_calls", toolCalls))
                 sink.finish(finish, if (usage) usageJson else null)
             }
