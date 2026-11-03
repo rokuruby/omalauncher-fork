@@ -2,11 +2,16 @@ package dev.omalauncher.local
 
 import android.content.Context
 import android.util.Log
+import com.google.ai.edge.litertlm.ActivationDataType
 import com.google.ai.edge.litertlm.Backend
+import com.google.ai.edge.litertlm.Content
 import com.google.ai.edge.litertlm.Conversation
 import com.google.ai.edge.litertlm.ConversationConfig
 import com.google.ai.edge.litertlm.Engine
 import com.google.ai.edge.litertlm.EngineConfig
+import com.google.ai.edge.litertlm.SamplerConfig
+import com.google.ai.edge.litertlm.SpeculativeDecodingConfig
+import com.google.ai.edge.litertlm.SpeculativeDecodingMode
 import java.io.File
 import java.util.concurrent.Executors
 import java.util.concurrent.ScheduledFuture
@@ -29,16 +34,12 @@ class LocalModel(
 
     private var engine: Engine? = null
 
-    /** The backend it runs on ("GPU", "CPU"), once loaded. */
+    /** How it runs ("gpu", "gpu-fp32", "cpu"), once loaded. */
     @Volatile var backend: String? = null
         private set
 
     private var kept: Conversation? = null
     private var keptKey: String? = null
-
-    /** A GPU load that crashed the launcher left this behind: the CPU from then on. */
-    private val gpuMark get() = File(context.filesDir, "gemma-gpu-loading")
-    private val gpuBroken get() = File(context.filesDir, "gemma-gpu-broken")
 
     val present get() = Gemma.present(home())
 
@@ -100,36 +101,100 @@ class LocalModel(
         keptKey = null
     }
 
+    /** One way to load the model: [label] for the log, and the config it loads with. */
+    private class Attempt(
+        val label: String,
+        val gpu: Boolean,
+        val config: (path: String, cache: String) -> EngineConfig,
+    )
+
+    /**
+     * The ways to load, best first: the GPU as LiteRT-LM picks (FLOAT16, speculative decoding), the GPU in FLOAT32
+     * without speculative decoding (what older Adreno GPUs answer sense with, google-ai-edge/LiteRT-LM#3879), then
+     * the CPU. Each must answer a one-word test sensibly before it's used.
+     */
+    private val attempts =
+        listOf(
+            Attempt("gpu", true) { path, cache -> EngineConfig(modelPath = path, backend = Backend.GPU(), maxNumTokens = Gemma.MAX_TOKENS, cacheDir = cache) },
+            Attempt("gpu-fp32", true) { path, cache ->
+                EngineConfig(
+                    modelPath = path,
+                    backend = Backend.GPU(),
+                    maxNumTokens = Gemma.MAX_TOKENS,
+                    cacheDir = cache,
+                    activationDataType = ActivationDataType.FLOAT32,
+                    speculativeDecodingConfig = SpeculativeDecodingConfig(SpeculativeDecodingMode.OFF),
+                )
+            },
+            Attempt("cpu", false) { path, cache -> EngineConfig(modelPath = path, backend = Backend.CPU(CPU_THREADS), maxNumTokens = Gemma.MAX_TOKENS, cacheDir = cache) },
+        )
+
+    /** Ways that failed for good: they crashed the launcher, or answered nonsense. */
+    private val brokenFile get() = File(context.filesDir, "gemma-broken")
+
+    /** The way being loaded, left behind when a load takes the launcher down. */
+    private val loadingFile get() = File(context.filesDir, "gemma-loading")
+
     private fun load(): Engine {
         engine?.let { return it }
         val file = Gemma.modelFile(home())
         check(Gemma.present(home())) { "Gemma 4 E2B isn't on this phone yet" }
-        // A GPU load still marked from last time took the launcher down with it.
-        if (gpuMark.exists()) {
-            gpuMark.delete()
-            gpuBroken.createNewFile()
+        val broken = runCatching { brokenFile.readLines().toMutableSet() }.getOrDefault(mutableSetOf())
+        // A load still marked from last time took the launcher down with it.
+        runCatching { loadingFile.readText().trim() }.getOrNull()?.takeIf { it.isNotEmpty() }?.let {
+            note("$it crashed the launcher last time: not tried again")
+            broken += it
+            brokenFile.writeText(broken.joinToString("\n"))
         }
-        val cache = File(context.cacheDir, "litert-lm").apply { mkdirs() }.path
-        val backends = if (gpuBroken.exists()) listOf(Backend.CPU(CPU_THREADS)) else listOf(Backend.GPU(), Backend.CPU(CPU_THREADS))
+        loadingFile.delete()
+        note("loading ${file.path} (${file.length()} bytes) on ${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL}, ${if (android.os.Build.VERSION.SDK_INT >= 31) android.os.Build.SOC_MODEL else android.os.Build.HARDWARE}, LiteRT-LM ${LITERT_LM}")
         var failure: Throwable? = null
-        for (b in backends) {
-            val gpu = b is Backend.GPU
-            if (gpu) gpuMark.createNewFile()
+        for (a in attempts) {
+            if (a.label in broken) {
+                note("${a.label}: skipped, it failed before")
+                continue
+            }
+            val cache = File(context.cacheDir, "litert-lm-${a.label}").apply { mkdirs() }.path
+            loadingFile.writeText(a.label)
+            var e: Engine? = null
             try {
-                val e = Engine(EngineConfig(modelPath = file.path, backend = b, maxNumTokens = Gemma.MAX_TOKENS, cacheDir = cache))
+                val t0 = System.currentTimeMillis()
+                e = Engine(a.config(file.path, cache))
                 e.initialize()
+                val t1 = System.currentTimeMillis()
+                val answer =
+                    e.createConversation(ConversationConfig(samplerConfig = SamplerConfig(topK = 1, topP = 1.0, temperature = 0.0))).use {
+                        it.sendMessage("Reply with only the word OK.").contents.contents.filterIsInstance<Content.Text>().joinToString("") { c -> c.text }
+                    }
+                val t2 = System.currentTimeMillis()
+                note("${a.label}: loaded in ${t1 - t0} ms, test answered ${answer.take(80).replace('\n', ' ')} in ${t2 - t1} ms")
+                if (!answer.contains("ok", ignoreCase = true)) {
+                    note("${a.label}: that's not OK: nonsense from this backend, so the next one")
+                    broken += a.label
+                    brokenFile.writeText(broken.joinToString("\n"))
+                    runCatching { e.close() }
+                    continue
+                }
                 engine = e
-                backend = b.name
-                Log.i(TAG, "loaded on ${b.name}")
+                backend = a.label
+                note("using ${a.label}")
                 return e
             } catch (t: Throwable) {
-                Log.w(TAG, "couldn't load on ${b.name}", t)
+                note("${a.label}: failed: $t")
+                Log.w(TAG, "couldn't load on ${a.label}", t)
                 failure = t
+                e?.let { runCatching { it.close() } }
             } finally {
-                if (gpu) gpuMark.delete()
+                loadingFile.delete()
             }
         }
         throw IllegalStateException("couldn't load Gemma: ${failure?.message}", failure)
+    }
+
+    /** For the user and for us: how loading went, in Download/omalauncher/gemma.log (this phone has no logcat). */
+    private fun note(message: String) {
+        Log.i(TAG, message)
+        runCatching { File(LOG).appendText("${java.util.Date()} $message\n") }
     }
 
     private fun idle() {
@@ -139,7 +204,7 @@ class LocalModel(
             engine?.let { runCatching { it.close() } }
             engine = null
             backend = null
-            Log.i(TAG, "unloaded")
+            note("unloaded after ${IDLE_MS / 60000} minutes unused")
         } finally {
             lock.release()
         }
@@ -149,5 +214,9 @@ class LocalModel(
         private const val TAG = "gemma"
         const val IDLE_MS = 10 * 60 * 1000L
         private const val CPU_THREADS = 4
+        private const val LOG = "/storage/emulated/0/Download/omalauncher/gemma.log"
+
+        /** The LiteRT-LM in this build, for the log. */
+        private const val LITERT_LM = "0.19.0"
     }
 }
