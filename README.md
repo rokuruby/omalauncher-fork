@@ -1,6 +1,6 @@
 # omalauncher (Rokuruby's unofficial fork)
 
-This is my unofficial fork of Omalauncher based on version 0.17, later updated to 0.18, AI was used to vibe code my customized needs(deal with it). All credits go to @simonschubert on X/Twitter & ToSo for their fork of Android widgets on Omalauncher.
+This is my unofficial fork of Omalauncher based on version 0.17, later updated to 0.18, AI was used to vibe code my customized needs(deal with it). All credits go to @simonschubert on X/Twitter & ToS0 for their fork of Android widgets on Omalauncher.
 
 I'm not responsible for any bugs or security issues, as I'm just an average guy with limited technical knowledge.
 
