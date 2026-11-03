@@ -21,8 +21,8 @@ android {
         applicationId = "dev.omalauncher"
         minSdk = 29
         targetSdk = 37
-        versionCode = 29
-        versionName = "0.18.0"
+        versionCode = 30
+        versionName = "0.18.0-gemma"
         ndk { abiFilters += "arm64-v8a" }
     }
 
@@ -64,7 +64,7 @@ android {
         release {
             // Shrinks the APK and drops what the app doesn't use, like the owl module's unused parts.
             isMinifyEnabled = true
-            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"))
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
             signingConfig = signingConfigs.getByName(if (uploadKey != null) "release" else "debug")
         }
     }
@@ -91,6 +91,7 @@ dependencies {
     implementation(libs.commons.compress)
     implementation(libs.androidsvg)
     implementation(libs.zxing.core)
+    implementation(libs.litertlm.android)
     implementation(project(":owl"))
     testImplementation(libs.junit)
     // android.jar only has stubs of org.json.

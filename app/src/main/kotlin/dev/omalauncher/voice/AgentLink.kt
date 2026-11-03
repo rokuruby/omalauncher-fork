@@ -1,5 +1,6 @@
 package dev.omalauncher.voice
 
+import dev.omalauncher.local.Gemma
 import dev.omalauncher.widgets.WidgetEngine
 import org.json.JSONArray
 import org.json.JSONObject
@@ -122,6 +123,8 @@ val VOICE_LINKS: Map<String, (write: (String) -> Unit) -> AgentLink> =
         "copilot" to { w -> AcpLink(w, "copilot --acp") },
         "kimi" to { w -> AcpLink(w, "kimi acp") },
         "cursor-agent" to { w -> AcpLink(w, "cursor-agent acp") },
+        // Served in the launcher itself (LocalAcp), not by a command in Linux.
+        Gemma.BIN to { w -> AcpLink(w, "true") },
     )
 
 private fun sh(s: String) = "'" + s.replace("'", "'\\''") + "'"

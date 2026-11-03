@@ -3,7 +3,7 @@ name: patched
 # Builds the widgets + Download APK, signed with the key in this repo's secrets, and keeps it as an artifact.
 on:
   push:
-    branches: [widgets-download]
+    branches: [widgets-download, local-gemma]
   workflow_dispatch:
 
 permissions:
@@ -47,8 +47,16 @@ jobs:
       - name: Build
         run: ./gradlew :app:assembleRelease
 
+      # Named for its version and what this fork adds, so the APKs in Download tell themselves apart.
+      - name: Name the APK
+        run: |
+          version=$(sed -n 's/.*versionName = "\(.*\)".*/\1/p' app/build.gradle.kts)
+          name="omalauncher-$version-androidwidgets-fileaccess-chinesevoice-localgemma4"
+          mv app/build/outputs/apk/release/app-release.apk "$name.apk"
+          echo "APK_NAME=$name" >> "$GITHUB_ENV"
+
       - uses: actions/upload-artifact@v4
         with:
-          name: omalauncher-widgets-download
-          path: app/build/outputs/apk/release/app-release.apk
+          name: ${{ env.APK_NAME }}
+          path: ${{ env.APK_NAME }}.apk
           if-no-files-found: error

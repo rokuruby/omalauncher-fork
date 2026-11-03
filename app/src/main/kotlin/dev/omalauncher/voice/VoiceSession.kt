@@ -19,6 +19,9 @@ import dev.omalauncher.linux.AgentStore
 import dev.omalauncher.linux.JobState
 import dev.omalauncher.linux.Proot
 import dev.omalauncher.linux.killTree
+import dev.omalauncher.local.Gemma
+import dev.omalauncher.local.LocalAcp
+import dev.omalauncher.local.LocalModel
 import dev.omalauncher.ui.Speaker
 import dev.omalauncher.ui.Speech
 import kotlinx.coroutines.MainScope
@@ -40,6 +43,8 @@ class VoiceSession(
     private val proot: Proot,
     private val agents: AgentStore,
     private val speaker: Speaker,
+    /** Gemma on this phone, Voice's agent with no process in Linux. */
+    private val local: LocalModel,
 ) {
     enum class Phase { Off, Starting, Idle, Thinking, Working, Approval }
 
@@ -531,7 +536,9 @@ class VoiceSession(
         complaints.clear()
         phase = Phase.Starting
         val p =
-            runCatching { proot.process(l.command(session)).redirectErrorStream(false).start() }.getOrElse {
+            runCatching {
+                if (a.bin == Gemma.BIN) LocalAcp(local, File(context.filesDir, "voice/gemma-sessions")) else proot.process(l.command(session)).redirectErrorStream(false).start()
+            }.getOrElse {
                 phase = Phase.Off
                 notice = str(R.string.voice_cant_start, a.name, it.message.orEmpty())
                 return

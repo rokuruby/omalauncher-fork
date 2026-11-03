@@ -165,4 +165,8 @@
     <string name="licenses_use_androidsvg">desenha ícones SVG</string>
     <string name="licenses_use_zxing">desenha os QR codes com que os widgets são compartilhados</string>
     <string name="licenses_use_json">lê e escreve JSON</string>
+    <string name="linux_agent_gemma">Gemma 4 E2B do Google, neste telefone e offline: OpenCode e Voice com ele</string>
+    <string name="gemma_download_title">Baixar %1$s?</string>
+    <string name="gemma_download_message">O modelo tem %1$s. Depois do download ele roda neste telefone sem conta nem internet; de preferência no Wi-Fi.</string>
+    <string name="gemma_download_confirm">Baixar</string>
 </resources>

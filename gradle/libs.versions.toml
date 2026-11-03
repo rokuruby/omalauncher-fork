@@ -8,6 +8,7 @@ commons-compress = "1.28.0"
 zxing = "3.5.4"
 junit = "4.13.2"
 org-json = "20260814"
+litertlm = "0.19.0"
 
 [libraries]
 androidx-activity-compose = { module = "androidx.activity:activity-compose", version.ref = "androidx-activity" }
@@ -19,6 +20,7 @@ org-json = { module = "org.json:json", version.ref = "org-json" }
 androidsvg = { module = "com.caverock:androidsvg-aar", version.ref = "androidsvg" }
 commons-compress = { module = "org.apache.commons:commons-compress", version.ref = "commons-compress" }
 zxing-core = { module = "com.google.zxing:core", version.ref = "zxing" }
+litertlm-android = { module = "com.google.ai.edge.litertlm:litertlm-android", version.ref = "litertlm" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

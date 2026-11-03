@@ -118,7 +118,9 @@ import androidx.compose.ui.unit.min as minDp
 import dev.omalauncher.AppLanguage
 import dev.omalauncher.R
 import dev.omalauncher.linux.LinuxState
+import dev.omalauncher.linux.Agent
 import dev.omalauncher.linux.JobState
+import dev.omalauncher.linux.asksFirst
 import dev.omalauncher.Runtime
 import dev.omalauncher.voice.VoiceSession
 import dev.omalauncher.voice.VoiceSession.Phase
@@ -152,6 +154,9 @@ fun VoiceScreen(
     val haptics = LocalHapticFeedback.current
     var viewing by remember { mutableStateOf<String?>(null) }
     var picking by remember { mutableStateOf(false) }
+
+    /** An agent picked whose install is a big download (Gemma's model), asked about first. */
+    var asking by remember { mutableStateOf<Agent?>(null) }
     var tuning by remember { mutableStateOf(false) }
     var showSteps by remember { mutableStateOf(false) }
     var draft by remember { mutableStateOf("") }
@@ -279,6 +284,8 @@ fun VoiceScreen(
                                 speaker.stop()
                                 if (it in installed) {
                                     session.switchTo(it)
+                                } else if (it.asksFirst()) {
+                                    asking = it
                                 } else {
                                     speech.cancel()
                                     session.install(it)
@@ -294,6 +301,13 @@ fun VoiceScreen(
                                 }
                             },
                         )
+                    }
+                }
+                asking?.let { agent ->
+                    DownloadDialog(agent, onDismiss = { asking = null }) {
+                        asking = null
+                        speech.cancel()
+                        session.install(agent)
                     }
                 }
                 if (ready) Chip((if (session.approveAll) "● " else "○ ") + stringResource(R.string.voice_allow_all), if (session.approveAll) yellow else Palette.muted) { session.approveEverything(!session.approveAll) }

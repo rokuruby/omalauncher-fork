@@ -7,6 +7,7 @@ import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import dev.omalauncher.R
+import dev.omalauncher.local.Gemma
 import dev.omalauncher.upgrade.Managed
 import dev.omalauncher.upgrade.Policy
 import kotlinx.coroutines.Dispatchers
@@ -54,7 +55,12 @@ val AGENTS =
             "http:muse[url=https://api.meta.ai/muse-launcher.sh,bin=muse,version_list_url=https://api.meta.ai/muse-code/channels/muse-stable,version_json_path=.version]",
         ),
         Agent("kimi", "Kimi", R.string.linux_agent_kimi, "npm:@moonshot-ai/kimi-code"),
+        // Not from mise: OpenCode on the launcher's own Gemma (see [Gemma]); installing it downloads the model.
+        Agent(Gemma.BIN, "Gemma 4 (local)", R.string.linux_agent_gemma, "opencode", command = Gemma.COMMAND),
     )
+
+/** Whether installing [agent] is a big download the user is asked about first. */
+fun Agent.asksFirst() = bin == Gemma.BIN
 
 /**
  * Brings mise itself up to date. Which backend a tool installs from is built into mise, and an old mise
@@ -105,6 +111,7 @@ fun agentInvocation(
     val quoted = shellQuote(if (prompt.startsWith("-")) " $prompt" else prompt)
     return when {
         agentBin == "opencode" -> "$agentBin --prompt $quoted"
+        agentBin == Gemma.BIN -> "${Gemma.COMMAND} --prompt $quoted"
         agentBin == "copilot" -> "$agentBin -i $quoted"
         agentBin == "claude" && readOnly -> "$agentBin --permission-mode plan $quoted"
         agentBin == "ori" -> "ori code --interactive --prompt $quoted"
@@ -126,7 +133,14 @@ class AgentStore(
     val states = mutableStateMapOf<String, JobState>()
 
     /** Shims are symlinks to a guest path (/root/.local/bin/mise), so don't follow them from the host. */
-    fun isInstalled(agent: Agent) = Files.exists(File(shims, agent.bin).toPath(), LinkOption.NOFOLLOW_LINKS)
+    fun isInstalled(agent: Agent) =
+        if (agent.bin == Gemma.BIN) {
+            Gemma.present(proot.home) && hasShim("opencode")
+        } else {
+            hasShim(agent.bin)
+        }
+
+    private fun hasShim(bin: String) = Files.exists(File(shims, bin).toPath(), LinkOption.NOFOLLOW_LINKS)
 
     /** The agent picked in the prompt bar, kept in the guest home where scripts can read it too. */
     private val preferredFile get() = File(proot.launcherConfig, "agent")
@@ -160,12 +174,16 @@ class AgentStore(
     suspend fun install(agent: Agent) =
         run(agent, R.string.linux_job_installing) { installScript(agent) }.also { ok -> if (ok) onInstalled(agent) }
 
-    /** Installs [agent] with mise, bootstrapping mise itself if needed. */
-    fun installScript(agent: Agent) =
-        buildString {
-            append(if (mise.exists()) "$MISE_SELF_UPDATE && " else "curl -fsSL https://mise.run | sh && ")
-            if (agent.node) append("mise use -g node@lts && ")
-            append("mise use -g ${shellQuote(agent.pkg)} && $MISE_CLEANUP")
+    /** Installs [agent] with mise, bootstrapping mise itself if needed; Gemma downloads its model after OpenCode. */
+    fun installScript(agent: Agent): String =
+        if (agent.bin == Gemma.BIN) {
+            (if (hasShim("opencode")) "" else installScript(AGENTS.first { it.bin == "opencode" }) + " && ") + "( ${Gemma.downloadScript}\n)"
+        } else {
+            buildString {
+                append(if (mise.exists()) "$MISE_SELF_UPDATE && " else "curl -fsSL https://mise.run | sh && ")
+                if (agent.node) append("mise use -g node@lts && ")
+                append("mise use -g ${shellQuote(agent.pkg)} && $MISE_CLEANUP")
+            }
         }
 
     /** Call after [installScript] succeeded: makes the agent show up in the drawer. */
@@ -175,7 +193,10 @@ class AgentStore(
     }
 
     suspend fun remove(agent: Agent) =
-        run(agent, R.string.linux_job_removing) { "mise unuse -g ${shellQuote(agent.pkg)} && $MISE_PRUNE" }
+        // Gemma's removal deletes the model and leaves OpenCode, which may be used on its own.
+        run(agent, R.string.linux_job_removing) {
+            if (agent.bin == Gemma.BIN) "rm -rf \"\$HOME/${Gemma.MODEL_PATH.substringBeforeLast('/')}\"" else "mise unuse -g ${shellQuote(agent.pkg)} && $MISE_PRUNE"
+        }
             .also {
                 refresh()
                 onChanged()
@@ -187,7 +208,10 @@ class AgentStore(
             Managed.text(File(proot.applications, "agent-${agent.bin}.desktop"), Policy.Owned) {
                 "[Desktop Entry]\nType=Application\nName=${agent.name}\nTerminal=true\nExec=${agent.command}\nIcon=${bundledIcon("agent-${agent.bin}")}\n"
             }
-        } + codexConfig()
+        } + codexConfig() + gemmaCode()
+
+    /** `gemma-code`, OpenCode on the launcher's Gemma; there even before the model, which it offers to download. */
+    private fun gemmaCode() = listOf(Managed.text(File(proot.rootfs, "usr/local/bin/${Gemma.COMMAND}"), Policy.Owned, executable = true) { Gemma.wrapperScript })
 
     /**
      * Codex starts a shared background server and reads its start time with `ps`; when that fails, Codex

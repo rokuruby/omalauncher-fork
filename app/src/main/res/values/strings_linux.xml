@@ -214,4 +214,8 @@
     <string name="licenses_use_androidsvg">draws SVG icons</string>
     <string name="licenses_use_zxing">draws the QR codes widgets are shared with</string>
     <string name="licenses_use_json">reads and writes JSON</string>
+    <string name="linux_agent_gemma">Google\'s Gemma 4 E2B, run on this phone, offline: OpenCode and Voice on it</string>
+    <string name="gemma_download_title">Download %1$s?</string>
+    <string name="gemma_download_message">The model is %1$s. It runs on this phone with no account or internet after the download; Wi-Fi is best.</string>
+    <string name="gemma_download_confirm">Download</string>
 </resources>

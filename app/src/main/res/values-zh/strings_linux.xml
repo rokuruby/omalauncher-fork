@@ -159,4 +159,8 @@
     <string name="licenses_use_androidsvg">绘制 SVG 图标</string>
     <string name="licenses_use_zxing">绘制分享小组件用的二维码</string>
     <string name="licenses_use_json">读写 JSON</string>
+    <string name="linux_agent_gemma">谷歌的 Gemma 4 E2B，离线运行在这部手机上：OpenCode 和语音都用它</string>
+    <string name="gemma_download_title">下载 %1$s？</string>
+    <string name="gemma_download_message">模型大小为 %1$s。下载后在这部手机上运行，无需账号或网络；最好使用 Wi-Fi。</string>
+    <string name="gemma_download_confirm">下载</string>
 </resources>

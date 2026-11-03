@@ -73,6 +73,8 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import dev.omalauncher.local.LocalModel
+import dev.omalauncher.local.OpenAiServer
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.concurrent.thread
@@ -112,7 +114,11 @@ class Runtime(
     val speaker = Speaker(context)
 
     /** A spoken conversation with a coding agent: the voice screen's (VoiceActivity). */
-    val voice by lazy { VoiceSession(context, proot, agents, speaker) }
+    val voice by lazy { VoiceSession(context, proot, agents, speaker, local) }
+
+    /** Gemma 4 E2B in the launcher: Voice's local agent, and an OpenAI-compatible server for Linux (gemma-code). */
+    val local = LocalModel(context) { proot.home }
+    private val localServer = OpenAiServer(local).also { it.start() }
     val updates = SystemUpdates(proot, pacman, agents)
     val gpu = Gpu(context, proot, pacman)
 
