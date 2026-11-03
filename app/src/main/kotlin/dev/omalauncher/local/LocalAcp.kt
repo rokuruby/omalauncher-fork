@@ -7,6 +7,7 @@ import com.google.ai.edge.litertlm.ConversationConfig
 import com.google.ai.edge.litertlm.Message
 import com.google.ai.edge.litertlm.MessageCallback
 import com.google.ai.edge.litertlm.SamplerConfig
+import dev.omalauncher.linux.shellQuote
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.ByteArrayInputStream
@@ -27,6 +28,8 @@ import java.util.concurrent.TimeUnit
 class LocalAcp(
     private val model: LocalModel,
     private val dir: File,
+    /** Runs a shell command in Linux, with what to give it on stdin; its exit code and output. */
+    private val guest: (script: String, stdin: ByteArray?) -> Pair<Int, String>,
 ) : Process() {
     private val out = LinkedBlockingQueue<ByteArray>()
     private val ended = CountDownLatch(1)
@@ -115,7 +118,7 @@ class LocalAcp(
     override fun destroy() {
         if (!alive) return
         alive = false
-        runCatching { current?.cancelProcess() }
+        cancel()
         work.shutdownNow()
         out.put(ByteArray(0))
         ended.countDown()
@@ -140,10 +143,19 @@ class LocalAcp(
         code: Int = -32000,
     ) = send(JSONObject().put("id", id).put("error", JSONObject().put("code", code).put("message", message)))
 
+    /** Requests of ours (asking before a write) waiting for Voice's answer, by id. */
+    private val asked = java.util.concurrent.ConcurrentHashMap<Int, java.util.concurrent.CompletableFuture<JSONObject?>>()
+    private val nextAsk = java.util.concurrent.atomic.AtomicInteger(0)
+
     private fun receive(line: String) {
         val m = runCatching { JSONObject(line) }.getOrNull() ?: return
         val id = m.opt("id")
         val params = m.optJSONObject("params") ?: JSONObject()
+        // An answer to one of our questions.
+        if (m.optString("method").isEmpty() && id != null) {
+            asked.remove(m.optInt("id", -1))?.complete(m.optJSONObject("result"))
+            return
+        }
         when (m.optString("method")) {
             "initialize" ->
                 id?.let {
@@ -169,10 +181,25 @@ class LocalAcp(
                     }
                 }
             "session/prompt" -> id?.let { rpc -> work.execute { prompt(rpc, params) } }
-            "session/cancel" -> runCatching { current?.cancelProcess() }
+            "session/cancel" -> cancel()
             else -> id?.let { fail(it, "${m.optString("method")} isn't supported", -32601) }
         }
     }
+
+    @Volatile private var stopped = false
+
+    private fun cancel() {
+        stopped = true
+        runCatching { current?.cancelProcess() }
+        // A question still open is answered no.
+        asked.values.forEach { it.complete(null) }
+        asked.clear()
+    }
+
+    private fun update(
+        s: String,
+        u: JSONObject,
+    ) = send(JSONObject().put("method", "session/update").put("params", JSONObject().put("sessionId", s).put("update", u)))
 
     private fun prompt(
         rpc: Any,
@@ -184,7 +211,7 @@ class LocalAcp(
             }.orEmpty()
         if (!model.present) return fail(rpc, "Gemma 4 E2B isn't on this phone yet: install Gemma 4 (local) in Agents to download it.")
         val s = session ?: return fail(rpc, "no session")
-        var cancelled = false
+        stopped = false
         val reply = StringBuilder()
         val problem =
             runCatching {
@@ -193,38 +220,51 @@ class LocalAcp(
                     val key = "voice:$s:${history.size}"
                     val config =
                         ConversationConfig(
+                            systemInstruction = Contents.of(INSTRUCTIONS),
                             initialMessages = history.map { (who, t) -> if (who == "user") Message.user(t) else Message.model(t) },
+                            tools = TOOLS.map { com.google.ai.edge.litertlm.tool(it) },
                             samplerConfig = SamplerConfig(topK = 64, topP = 0.95, temperature = 1.0),
+                            automaticToolCalling = false,
                         )
                     val conv = model.conversation(engine, key) { config }.first
                     current = conv
-                    val done = CountDownLatch(1)
-                    var error: Throwable? = null
-                    conv.sendMessageAsync(
-                        Message.user(text),
-                        object : MessageCallback {
-                            override fun onMessage(message: Message) {
-                                val t = message.contents.contents.filterIsInstance<Content.Text>().joinToString("") { it.text }
-                                if (t.isEmpty()) return
-                                reply.append(t)
-                                val chunk = JSONObject().put("sessionUpdate", "agent_message_chunk").put("content", JSONObject().put("type", "text").put("text", t))
-                                send(JSONObject().put("method", "session/update").put("params", JSONObject().put("sessionId", s).put("update", chunk)))
-                            }
+                    var next: Message = Message.user(text)
+                    // Each round: what it says, then the tools it calls, whose results go back to it.
+                    for (round in 0..MAX_TOOL_ROUNDS) {
+                        val calls = ArrayList<com.google.ai.edge.litertlm.ToolCall>()
+                        val done = CountDownLatch(1)
+                        var error: Throwable? = null
+                        conv.sendMessageAsync(
+                            next,
+                            object : MessageCallback {
+                                override fun onMessage(message: Message) {
+                                    calls += message.toolCalls
+                                    val t = message.contents.contents.filterIsInstance<Content.Text>().joinToString("") { it.text }
+                                    if (t.isEmpty()) return
+                                    reply.append(t)
+                                    update(s, JSONObject().put("sessionUpdate", "agent_message_chunk").put("content", JSONObject().put("type", "text").put("text", t)))
+                                }
 
-                            override fun onDone() = done.countDown()
+                                override fun onDone() = done.countDown()
 
-                            override fun onError(throwable: Throwable) {
-                                error = throwable
-                                done.countDown()
-                            }
-                        },
-                    )
-                    done.await()
+                                override fun onError(throwable: Throwable) {
+                                    error = throwable
+                                    done.countDown()
+                                }
+                            },
+                        )
+                        done.await()
+                        val e = error
+                        if (e is java.util.concurrent.CancellationException || stopped) break
+                        if (e != null) throw e
+                        if (calls.isEmpty() || round == MAX_TOOL_ROUNDS) break
+                        val results = calls.map { c -> Content.ToolResponse(c.name, use(s, c)) }
+                        if (stopped) break
+                        next = Message.tool(Contents.of(results))
+                        if (reply.isNotEmpty() && !reply.last().isWhitespace()) reply.append(' ')
+                    }
                     current = null
-                    val e = error
-                    if (e is java.util.concurrent.CancellationException) cancelled = true
-                    if (e != null && !cancelled) throw e
-                    if (cancelled) {
+                    if (stopped) {
                         model.drop()
                     } else {
                         history += "user" to text
@@ -233,15 +273,91 @@ class LocalAcp(
                     }
                 }
             }.exceptionOrNull()
+        current = null
         when {
-            problem != null -> {
+            problem != null && !stopped -> {
                 Log.w(TAG, "turn failed", problem)
                 fail(rpc, problem.message ?: problem.toString())
             }
             else -> {
-                if (!cancelled) save(s)
-                result(rpc, JSONObject().put("stopReason", if (cancelled) "cancelled" else "end_turn"))
+                if (!stopped) save(s)
+                result(rpc, JSONObject().put("stopReason", if (stopped) "cancelled" else "end_turn"))
             }
+        }
+    }
+
+    // ---------- tools: the user's files, in Linux
+
+    /** Runs one of the model's tool calls and says what it gave; a write is asked about first. */
+    private fun use(
+        s: String,
+        call: com.google.ai.edge.litertlm.ToolCall,
+    ): String {
+        val path = guestPath(call.arguments["path"]?.toString().orEmpty())
+        val id = "t${System.nanoTime()}"
+        val (kind, title) =
+            when (call.name) {
+                "list_folder" -> "read" to "List $path"
+                "read_file" -> "read" to "Read $path"
+                "write_file" -> "edit" to "Write $path"
+                else -> return "There's no tool called ${call.name}."
+            }
+        if (path.isEmpty()) return "No path was given."
+        val raw = JSONObject().put("path", path)
+        val toolCall = JSONObject().put("toolCallId", id).put("title", title).put("kind", kind).put("rawInput", raw).put("locations", JSONArray().put(JSONObject().put("path", path)))
+        update(s, JSONObject(toolCall.toString()).put("sessionUpdate", "tool_call").put("status", "in_progress"))
+        val q = shellQuote(path)
+        val answer =
+            when (call.name) {
+                "list_folder" -> guest("ls -la -- $q 2>&1 | head -c $MAX_LIST", null).second.ifBlank { "(empty)" }
+                "read_file" -> {
+                    val (code, out) = guest("head -c $MAX_READ -- $q 2>&1; s=\$(wc -c < $q 2>/dev/null) && [ \"\$s\" -gt $MAX_READ ] && printf '\\n[only the first $MAX_READ of %s bytes]' \"\$s\"; true", null)
+                    if (code != 0 && out.isBlank()) "Couldn't read $path." else out
+                }
+                "write_file" -> {
+                    val content = call.arguments["content"]?.toString().orEmpty()
+                    if (!allowed(s, id, toolCall)) {
+                        "The user said no: $path wasn't written."
+                    } else {
+                        val (code, out) = guest("mkdir -p -- \"\$(dirname -- $q)\" && cat > $q", content.toByteArray())
+                        if (code == 0) "Wrote ${content.toByteArray().size} bytes to $path." else "Couldn't write $path: ${out.take(300)}"
+                    }
+                }
+                else -> ""
+            }
+        update(s, JSONObject().put("sessionUpdate", "tool_call_update").put("toolCallId", id).put("status", "completed"))
+        return answer
+    }
+
+    /** Asks Voice before a write (it may answer at once, for "allow all" or an earlier "always"); false for no. */
+    private fun allowed(
+        s: String,
+        id: String,
+        toolCall: JSONObject,
+    ): Boolean {
+        val rpc = 1_000_000 + nextAsk.incrementAndGet()
+        val answer = java.util.concurrent.CompletableFuture<JSONObject?>()
+        asked[rpc] = answer
+        val options =
+            JSONArray()
+                .put(JSONObject().put("optionId", "allow").put("name", "Allow").put("kind", "allow_once"))
+                .put(JSONObject().put("optionId", "always").put("name", "Always allow").put("kind", "allow_always"))
+                .put(JSONObject().put("optionId", "reject").put("name", "Don't allow").put("kind", "reject_once"))
+        send(JSONObject().put("id", rpc).put("method", "session/request_permission").put("params", JSONObject().put("sessionId", s).put("toolCall", toolCall).put("options", options)))
+        val r = runCatching { answer.get() }.getOrNull() ?: return false
+        val picked = r.optJSONObject("outcome")?.optString("optionId")
+        return picked == "allow" || picked == "always"
+    }
+
+    /** A path as Linux takes it: relative ones from the home folder. */
+    private fun guestPath(p: String): String {
+        val t = p.trim().removeSurrounding("\"").removeSurrounding("'")
+        return when {
+            t.isEmpty() -> ""
+            t == "~" -> "/root"
+            t.startsWith("~/") -> "/root/" + t.removePrefix("~/")
+            t.startsWith("/") -> t
+            else -> "/root/$t"
         }
     }
 
@@ -268,5 +384,49 @@ class LocalAcp(
 
     companion object {
         private const val TAG = "gemma-voice"
+
+        /** How many times a turn may go back to its tools before it has to answer. */
+        private const val MAX_TOOL_ROUNDS = 6
+
+        /** Bytes of a file or a folder listing the model reads: more would crowd out the conversation. */
+        private const val MAX_READ = 12000
+        private const val MAX_LIST = 6000
+
+        private val INSTRUCTIONS =
+            "You can use tools on the user's phone: list_folder, read_file and write_file. Paths are Linux paths: the " +
+                "home folder is /root and the phone's Download folder is /sdcard/Download. Use a path exactly as the " +
+                "user gives it; a path starting with / is absolute. When you don't know where a file is, list the folder " +
+                "first. To change a file, read it, then write its whole new content. Writing asks the user first. Use the " +
+                "tools only when the user asks about their files."
+
+        private fun spec(
+            name: String,
+            description: String,
+            vararg params: Pair<String, String>,
+        ) = object : com.google.ai.edge.litertlm.OpenApiTool {
+            private val json =
+                JSONObject()
+                    .put("name", name)
+                    .put("description", description)
+                    .put(
+                        "parameters",
+                        JSONObject()
+                            .put("type", "object")
+                            .put("properties", JSONObject().apply { params.forEach { (k, d) -> put(k, JSONObject().put("type", "string").put("description", d)) } })
+                            .put("required", JSONArray(params.map { it.first })),
+                    ).toString()
+
+            override fun getToolDescriptionJsonString() = json
+
+            // Never called: the calls are run here (automaticToolCalling = false).
+            override fun execute(paramsJsonString: String) = "{}"
+        }
+
+        private val TOOLS =
+            listOf(
+                spec("list_folder", "Lists the files and folders in a folder.", "path" to "The folder, like /sdcard/Download"),
+                spec("read_file", "Reads a text file.", "path" to "The file"),
+                spec("write_file", "Writes a text file, replacing what was in it. The user is asked first.", "path" to "The file", "content" to "The whole new content"),
+            )
     }
 }

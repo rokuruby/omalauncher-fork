@@ -537,7 +537,7 @@ class VoiceSession(
         phase = Phase.Starting
         val p =
             runCatching {
-                if (a.bin == Gemma.BIN) LocalAcp(local, File(context.filesDir, "voice/gemma-sessions")) else proot.process(l.command(session)).redirectErrorStream(false).start()
+                if (a.bin == Gemma.BIN) LocalAcp(local, File(context.filesDir, "voice/gemma-sessions"), ::runInLinux) else proot.process(l.command(session)).redirectErrorStream(false).start()
             }.getOrElse {
                 phase = Phase.Off
                 notice = str(R.string.voice_cant_start, a.name, it.message.orEmpty())
@@ -595,6 +595,25 @@ class VoiceSession(
             p.outputStream.flush()
         }.onFailure { Log.w(TAG, "couldn't write to the agent", it) }
     }
+
+    /** For Gemma's file tools: [script] in Linux, given [stdin]; its exit code and output, or -1 when it can't run or hangs. */
+    private fun runInLinux(
+        script: String,
+        stdin: ByteArray?,
+    ): Pair<Int, String> =
+        runCatching {
+            val p = proot.process(script).start()
+            Thread({ runCatching { p.outputStream.use { o -> if (stdin != null) o.write(stdin) } } }, "gemma-stdin").apply { isDaemon = true }.start()
+            val out = StringBuilder()
+            val reader = Thread({ runCatching { out.append(p.inputStream.bufferedReader().readText()) } }, "gemma-stdout").apply { isDaemon = true }
+            reader.start()
+            if (!p.waitFor(60, java.util.concurrent.TimeUnit.SECONDS)) {
+                killTree(p)
+                return@runCatching -1 to "it took over a minute and was stopped"
+            }
+            reader.join(5000)
+            p.exitValue() to out.toString()
+        }.getOrElse { -1 to (it.message ?: "couldn't run it") }
 
     private fun stopAgent() {
         val p = process ?: return
