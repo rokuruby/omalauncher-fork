@@ -17,6 +17,7 @@ This fork will never be on the Play Store as it violates Big G's policies. Pray 
 - Fixing the voice chat foreign language funactionality: when I set it to a foreign language, it still detected my spoken language as English. I want to use the voice chat as a language tutor focusing on Chinese.
 - A local, on-device Gemma 4 LLM coding agent and voice chat, in case I don't have internet access to a cloud LLM.
 - Making sure Gemma 4 runs GPU accelerated on my outdated Snapdragon 8 Gen 1, because the latest Google LiteRT has issues supporting my older GPU.
+- Tweaking & reducing Gemma 4's Opencode tokens of instructions for faster response.
 
 ## Risks you should know about before using it
 
