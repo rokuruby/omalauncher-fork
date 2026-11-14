@@ -1,0 +1,14 @@
+# Resolution and scale for wherever the desktop starts. On a monitor: ~/.config/omalauncher/monitor
+# (resolution, e.g. 2560x1440, the launcher sizes the output) and ~/.config/labwc/monitor-scale; on the
+# phone: ~/.config/labwc/resolution and ~/.config/labwc/scale. Change with the Display button
+# (desktop-display); the last choice is kept and used on the next start.
+if command -v desktop-display >/dev/null; then
+	desktop-display apply
+else
+	res="$(cat ~/.config/labwc/resolution 2>/dev/null)"
+	wlr-randr --output WL-1 ${res:+--custom-mode "$res"} --scale "$(cat ~/.config/labwc/scale 2>/dev/null || echo 1)" >/dev/null 2>&1
+fi
+swaybg -c '#1e2030' >/dev/null 2>&1 &
+# desktop icons: the ~/Desktop folder (add icons with desktop-shortcut, or the "Add shortcut" icon)
+pcmanfm-qt --desktop >/tmp/pcmanfm-desktop.log 2>&1 &
+waybar >/tmp/waybar.log 2>&1 &

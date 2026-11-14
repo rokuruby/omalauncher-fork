@@ -37,6 +37,9 @@ class LocalAcp(
 
     @Volatile private var alive = true
 
+    /** This call's hold on the model, let go when it ends so Gemma is unloaded right away. */
+    private val holder = "voice:${UUID.randomUUID()}".also { model.hold(it) }
+
     @Volatile private var current: com.google.ai.edge.litertlm.Conversation? = null
 
     private var session: String? = null
@@ -122,6 +125,7 @@ class LocalAcp(
         work.shutdownNow()
         out.put(ByteArray(0))
         ended.countDown()
+        model.letGo(holder)
     }
 
     override fun toString() = "LocalAcp[gemma]"

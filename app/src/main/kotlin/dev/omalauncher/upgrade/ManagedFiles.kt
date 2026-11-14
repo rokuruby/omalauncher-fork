@@ -17,6 +17,12 @@ enum class Policy {
      * already there before we first wrote it is the user's.
      */
     Seeded,
+
+    /**
+     * A default the user may edit, like [Seeded], but put back as shipped
+     * whenever it's missing, so deleting it by accident doesn't lose it.
+     */
+    Kept,
 }
 
 /** One file the launcher provides. */
@@ -70,6 +76,7 @@ class ManagedFiles(
                     Policy.Owned -> true
                     // Missing but recorded: the user deleted it.
                     Policy.Seeded -> if (current == null) before == null else current == before
+                    Policy.Kept -> current == null || current == before
                 }
             if (!write) {
                 // Edited or deleted defaults keep what we last wrote on record, so they stay the user's, removal included.

@@ -1,0 +1,257 @@
+widget "obsidian" {
+  page: 1
+  order: 5
+  size: 6x4
+  minSize: 3x3
+
+  meta {
+    owl: 11
+    description: "A quiet Obsidian companion: browse Markdown notes, preview one, and append a quick thought."
+    version: "1.0.1"
+    license: "MIT"
+    category: "productivity"
+  }
+
+  requires { pacman: ["findutils", "jq", "sed"] }
+
+  state vaultDir = "" persist
+  state vaultDraft = null
+  state selected = null persist
+  state selectedName = "" persist
+  state skipLines = 5 persist
+  state query = ""
+  state addText = ""
+  state notice = ""
+
+  source notes = cmd("root=${sh(vaultDir)}\nif [ -z \"$root\" ]; then\n  for candidate in \"$HOME/Documents\" \"$HOME/Obsidian\" \"$HOME/notes\" \"/sdcard/Documents\" \"/storage/emulated/0/Documents\"; do\n    if [ -d \"$candidate/.obsidian\" ]; then root=\"$candidate\"; break; fi\n  done\nfi\nroot=$(printf '%s' \"$root\" | sed \"s#^~#$HOME#\")\nif [ ! -d \"$root\" ]; then printf '[]'; exit; fi\nfind \"$root\" -type f -name '*.md' -not -path '*/.obsidian/*' -printf '%p\\t%f\\t%TY-%Tm-%Td %TH:%TM\\n' | jq -Rsc 'split(\"\\n\") | map(select(length > 0) | split(\"\\t\") | {path: .[0], name: (.[1] | sub(\"\\\\.md$\"; \"\")), changed: .[2]}) | sort_by(.changed) | reverse'") every 30s json timeout 20s
+
+  source body = cmd(selected == null ? "printf ''" : "sed -n '${skipLines + 1},${skipLines + 220}p' -- ${sh(selected)}") every 30s
+
+  let entries = notes ?? []
+  let shown = query == "" ? entries : rank(entries, query)
+  let hasSelected = selected != null && selected != ""
+  let obsidianPurple = #7c3aed
+  let logo = "https://obsidian.md/images/obsidian-logo-gradient.svg"
+
+  state vaultEditing = false
+  state searchEditing = false
+
+  component AddBar() {
+    Row {
+      gap: 6
+      Text { text: ">"; font: mono; color: obsidianPurple }
+      Input {
+        text: addText
+        placeholder: "append a line to this note"
+        underline: false
+        weight: 1
+        onTap: {
+          vaultEditing = false
+          searchEditing = false
+        }
+        onChange: {
+          addText = value
+        }
+        onSubmit: {
+          if hasSelected && trim(value) != "" {
+            run("printf '\\n%s\\n' ${sh(value)} >> ${sh(selected)}")
+            addText = ""
+            notice = "added to ${selectedName}"
+          }
+            refresh()
+        }
+      }
+      Button {
+        text: "add"
+        color: obsidianPurple
+        onTap: {
+          if hasSelected && trim(addText) != "" {
+            run("printf '\\n%s\\n' ${sh(addText)} >> ${sh(selected)}")
+            addText = ""
+            notice = "added to ${selectedName}"
+            refresh()
+          }
+        }
+      }
+    }
+  }
+
+  Column {
+    gap: 8
+    fill: true
+    padding: 12
+
+    Row {
+      align: center
+      Image { src: logo; size: 28; fit: contain; label: "Obsidian rock logo" }
+      Text { text: "obsidian"; style: title; weight: 1 }
+      Button { text: "settings"; color: obsidianPurple; onTap: screen() }
+    }
+
+    if !hasSelected {
+      Column {
+        gap: 4
+        Text { text: "no note selected"; style: title }
+        Text { text: "open settings to choose the note shown here"; style: small; color: muted; maxLines: 1 }
+      }
+    } else {
+      Column {
+        gap: 4
+        padding: 10
+        weight: 1
+        background: alpha(surface, 0.8)
+        radius: 8 * corners
+        Row {
+          Text { text: selectedName; style: title; weight: 1; maxLines: 1 }
+          Button { text: "copy"; color: muted; onTap: copy(body ?? "") }
+        }
+        Column {
+          weight: 1
+          scroll: true
+          Text { text: body ?? "loading…"; font: mono; fontSize: 11; color: foreground }
+        }
+        Text { text: notice; style: small; color: obsidianPurple; maxLines: 1 }
+        AddBar { }
+      }
+    }
+  }
+
+  screen {
+    title: "obsidian settings"
+    Column {
+      gap: 8
+      fill: true
+      padding: 16
+
+      Row {
+        align: center
+        Image { src: logo; size: 32; fit: contain; label: "Obsidian rock logo" }
+        Text { text: "settings"; style: title; weight: 1 }
+        Button { text: "close"; color: muted; onTap: close() }
+      }
+
+      Text { text: "Choose the vault and note shown on the home tile."; style: small; color: muted }
+
+      Row {
+        gap: 6
+        align: center
+        Text { text: "vault"; style: label; color: obsidianPurple }
+        Input {
+          text: vaultDraft ?? vaultDir
+          placeholder: "~/Documents/Obsidian"
+          underline: false
+          weight: 1
+          onTap: {
+            vaultEditing = true
+            searchEditing = false
+          }
+          onChange: {
+            vaultDraft = value
+            vaultEditing = true
+          }
+          onSubmit: {
+            vaultDir = trim(value)
+            vaultDraft = null
+            selected = null
+            selectedName = ""
+            notice = "vault set"
+            vaultEditing = false
+          }
+        }
+        Button {
+          text: vaultEditing ? "apply" : "set"
+          color: vaultEditing ? obsidianPurple : muted
+          onTap: {
+            vaultDir = trim(vaultDraft ?? vaultDir)
+            vaultDraft = null
+            selected = null
+            selectedName = ""
+            notice = "vault set"
+            vaultEditing = false
+          }
+        }
+      }
+
+      Row {
+        gap: 6
+        align: center
+        Text { text: "skip top lines"; style: label; color: obsidianPurple; weight: 1 }
+        Button { text: "-"; color: muted; onTap: skipLines = max(0, skipLines - 1) }
+        Text { text: "${skipLines}"; font: mono }
+        Button { text: "+"; color: obsidianPurple; onTap: skipLines = skipLines + 1 }
+      }
+
+      Row {
+        gap: 6
+        align: center
+        Text { text: "/"; font: mono; color: obsidianPurple }
+        Input {
+          text: query
+          placeholder: "filter notes"
+          underline: false
+          weight: 1
+          onTap: searchEditing = true
+          onChange: {
+            query = value
+            searchEditing = true
+          }
+          onSubmit: searchEditing = false
+        }
+        Button {
+          text: searchEditing ? "done" : "clear"
+          color: searchEditing ? muted : obsidianPurple
+          onTap: {
+            if searchEditing {
+              searchEditing = false
+            } else {
+              query = ""
+            }
+          }
+        }
+        Button { text: "refresh"; color: muted; onTap: refresh() }
+      }
+
+      Row {
+        align: center
+        Text {
+          text: query == "" ? "${len(entries)} notes" : "${len(shown)} / ${len(entries)} matches"
+          style: label
+          color: obsidianPurple
+          weight: 1
+        }
+        Text { text: hasSelected ? "tile: ${selectedName}" : "no note selected"; style: small; color: muted; maxLines: 1 }
+      }
+
+      Column {
+        gap: 2
+        weight: 1
+        scroll: true
+        for n in shown key n.path {
+          Row {
+            gap: 8
+            padding: [6, 4]
+            background: n.path == selected ? alpha(obsidianPurple, 0.16) : null
+            radius: 4 * corners
+            onTap: {
+              selected = n.path
+              selectedName = n.name
+              notice = "selected for tile"
+            }
+            Text { text: n.path == selected ? "●" : "○"; color: obsidianPurple }
+            Text { text: n.name; font: mono; weight: 1; maxLines: 1 }
+            Text { text: n.changed; style: small; color: muted; maxLines: 1 }
+          }
+        }
+        if len(shown) == 0 {
+          Text { text: vaultDir == "" ? "set a vault path above" : "no Markdown notes found"; style: small; color: muted }
+        }
+      }
+
+      Row {
+        align: center
+        Text { text: hasSelected ? "selected note will show on the tile" : "select a note for the tile"; style: small; color: muted; weight: 1 }
+        Button { text: "done"; color: obsidianPurple; onTap: close() }
+      }
+    }
+  }
+}

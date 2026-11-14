@@ -1,0 +1,46 @@
+widget "yuan to ringgit" {
+  page: 1
+  order: 3
+  size: 3x3
+  minSize: 2x2
+  meta { description: "Type a yuan amount, see it in ringgit at the latest CNY to MYR rate"; version: "1.0"; license: "MIT"; category: "money"; owl: 16 }
+
+  // The rate, from open.er-api.com (no key). Refreshed every 6 hours.
+  source rate = http("https://open.er-api.com/v6/latest/CNY") every 6h json
+  source now = clock every 1m
+
+  // What the user typed, as text.
+  state yuan = "100" persist
+
+  let myrPerCny = rate.rates.MYR ?? null
+  let amount = num(yuan, null)
+  let myr = myrPerCny != null && amount != null ? amount * myrPerCny : null
+
+  Column {
+    gap: 6
+    padding: 4
+    Text { text: "yuan to ringgit"; style: label; color: muted }
+    Row {
+      gap: 6
+      align: center
+      Input { text: yuan; placeholder: "amount"; onChange: yuan = value; fontSize: 20; weight: 1; underline: true }
+      Text { text: "CNY"; style: label; color: muted }
+    }
+    Text {
+      text: myr == null ? (rate == null ? "loading…" : "…") : "RM ${fixed(myr, 2)}"
+      style: title
+      color: accent
+      bold: true
+    }
+    Text {
+      text: myrPerCny == null ? "rate unavailable" : "1 CNY = ${fixed(myrPerCny, 4)} MYR"
+      style: small
+      color: muted
+    }
+    Text {
+      text: rate.time_last_update_unix == null ? "" : "rate from ${fmtAgo(rate.time_last_update_unix, now)} ago"
+      style: small
+      color: muted
+    }
+  }
+}

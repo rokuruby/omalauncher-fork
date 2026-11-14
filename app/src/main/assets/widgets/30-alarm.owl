@@ -1,0 +1,133 @@
+widget "alarm" {
+  size: 2x1
+  meta { description: "Up to 5 alarms with a text, date and time each, switched on or off (✎ to edit). Rings at full volume until you tap the tile. Also lists alarms set with: linux-alarm HH:MM reason"; owl: 13 }
+
+  requires { pacman: ["jq", "libpulse", "procps-ng"] }
+
+  source alarms = file("~/.local/share/alarm/alarms.json") json
+  source ringing = file("~/.local/share/alarm/ringing")
+  source now = clock every 30s
+
+  // the 5 task slots; t is a Unix time (0 = not set yet)
+  state slots = [
+    {text: "", t: 0, task: false, alarm: false},
+    {text: "", t: 0, task: false, alarm: false},
+    {text: "", t: 0, task: false, alarm: false},
+    {text: "", t: 0, task: false, alarm: false},
+    {text: "", t: 0, task: false, alarm: false}
+  ] persist
+
+  // null while the file is still loading (as the tile starts): that is not ringing
+  let isRinging = (ringing ?? "") != ""
+  let nextHour = (floor((now ?? 0) / 3600) + 1) * 3600
+  let shown = slots.filter(s => s.task && s.alarm && s.t > 0).sortBy(s => s.t)
+  let cliAlarms = (alarms ?? []).filter(a => !contains(a.id, "-s"))
+
+  // every change goes to the script, which (re)schedules the ringing
+  on slots first { run("linux-alarm sync ${sh(toJson(slots))}") }
+
+  when isRinging { volume(100); notify("⏰ ${ringing}", "Tap the alarm tile to stop"); haptic() }
+
+  component Toggle(label, on) {
+    Text {
+      text: on ? "● ${label}" : "○ ${label}"
+      color: on ? background : muted
+      background: on ? accent : surface
+      padding: [10, 6]
+      radius: 14
+      align: center
+    }
+  }
+
+  // tapping anywhere on the tile stops a ringing alarm; otherwise it opens the task editor
+  // (on the widget, not the Column: a Column's onTap only covers its own lines, not the empty rest of the tile)
+  onTap: { if isRinging { run("linux-alarm stop") } else { screen() } }
+
+  Column {
+    if isRinging {
+      Text { text: "⏰ RINGING"; bold: true; color: red }
+      Text { text: ringing; maxLines: 2 }
+      Text { text: "tap to stop"; style: muted }
+    } else {
+      Row {
+        Text { text: "⏰ tasks"; style: muted; weight: 1 }
+        Text { text: "✎ edit"; color: accent; padding: [6, 2]; onTap: screen() }
+      }
+      if len(shown) + len(cliAlarms) == 0 {
+        Text { text: "nothing set"; style: muted }
+      }
+      for s in shown {
+        Text {
+          text: "🔔 ${fmtTime(s.t, fmtTime(s.t, "yyyyMMdd") == fmtTime(now ?? 0, "yyyyMMdd") ? "HH:mm" : "EEE d HH:mm")} ${s.text == "" ? "task" : s.text}"
+          color: s.t < (now ?? 0) ? muted : foreground
+          maxLines: 1
+        }
+      }
+      for a in cliAlarms {
+        Text { text: "🔔 ${fmtTime(a.time, "HH:mm")} ${a.label}"; maxLines: 1 }
+      }
+    }
+  }
+
+  screen {
+    title: "tasks & alarms"
+    Column {
+      scroll: true
+      gap: 12
+      padding: 12
+      if isRinging {
+        Text {
+          text: "⏰ ${ringing} · tap to stop"
+          bold: true; color: background; background: red; padding: 14; radius: 10; align: center
+          onTap: run("linux-alarm stop")
+        }
+      }
+      for s, i in slots key i {
+        Column {
+          let b = s.t > 0 ? s.t : nextHour
+          gap: 8
+          padding: 12
+          radius: 10
+          border: 1
+          borderColor: s.task && s.alarm ? accent : border
+          Row {
+            Text { text: "${i + 1}"; style: muted; width: 20 }
+            Input {
+              text: s.text
+              placeholder: "task ${i + 1}…"
+              weight: 1
+              onChange: slots = set(slots, i, merge(s, {text: value}))
+            }
+          }
+          Row {
+            align: center
+            Text { text: "‹"; style: title; padding: [10, 0]; onTap: slots = set(slots, i, merge(s, {t: b - 86400})) }
+            Text { text: fmtTime(b, "EEE d MMM"); align: center; weight: 1 }
+            Text { text: "›"; style: title; padding: [10, 0]; onTap: slots = set(slots, i, merge(s, {t: b + 86400})) }
+            Input {
+              text: fmtTime(b, "HH:mm")
+              placeholder: "HH:MM"
+              width: 72
+              onChange: {
+                if match(value, "^[0-2]?[0-9]:[0-5][0-9]$") != null {
+                  let nt = parseTime("${fmtTime(b, "yyyy-MM-dd")} ${value}", "yyyy-MM-dd H:mm")
+                  if nt != null { slots = set(slots, i, merge(s, {t: nt})) }
+                }
+              }
+            }
+          }
+          Row {
+            // one switch: on = shows on the tile and rings (both fields are kept equal for linux-alarm)
+            Box { width: 110; onTap: slots = set(slots, i, merge(s, {task: !(s.task && s.alarm), alarm: !(s.task && s.alarm), t: b})); Toggle { label: s.task && s.alarm ? "🔔 on" : "🔔 off"; on: s.task && s.alarm } }
+            Spacer { weight: 1 }
+            if s.task && s.alarm && b <= (now ?? 0) {
+              Text { text: "time passed"; color: red; style: small }
+            }
+          }
+        }
+      }
+      Text { text: "Switched on, an alarm shows on the tile and rings at its time. Changes save as you make them."; style: muted }
+      Button { text: "done"; onTap: close() }
+    }
+  }
+}

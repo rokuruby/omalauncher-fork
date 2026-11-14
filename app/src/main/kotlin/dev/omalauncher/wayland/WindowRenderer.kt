@@ -199,18 +199,32 @@ class WindowRenderer(
         return true
     }
 
+    /** Where the window's top-left corner is drawn, in window pixels: (0, 0) unless it's shrunk and centred (see [buildScene]). */
+    private var origin = 0f to 0f
+
     /** The window's surfaces bottom to top, then its popups; call with the server locked. */
     private fun buildScene(): List<Layer> {
         val g = window.xdg.effectiveGeometry
         val output = server.output.scale
-        val scale = output * fitScale(g.width * output, g.height * output, width, visibleBottom())
+        val fit = fitScale(g.width * output, g.height * output, width, visibleBottom())
+        val scale = output * fit
+        // In plain terms: a Linux window bigger than this view (like the 1920x1080 desktop) is shrunk to fit, and
+        // was then drawn from the top-left corner, leaving all the empty space on one side. A shrunk window is now
+        // centred, with equal bars on both sides (landscape) or above and below (portrait). Windows that fit
+        // (fit == 1) stay where they were, filling the view from the top-left.
+        origin =
+            if (fit < 1f) {
+                ((width - g.width * scale) / 2f).coerceAtLeast(0f) to ((visibleBottom() - g.height * scale) / 2f).coerceAtLeast(0f)
+            } else {
+                0f to 0f
+            }
         val layers = ArrayList<Layer>()
-        addTree(layers, window.surface, -g.x * scale, -g.y * scale, scale, inPopup = false)
+        addTree(layers, window.surface, origin.first - g.x * scale, origin.second - g.y * scale, scale, inPopup = false)
         for (popup in server.popups) {
             if (server.toplevelOf(popup.surface) !== window) continue
-            val origin = geometryOrigin(popup.xdg, scale) ?: continue
+            val at = geometryOrigin(popup.xdg, scale) ?: continue
             val pg = popup.xdg.effectiveGeometry
-            addTree(layers, popup.surface, origin.first - pg.x * scale, origin.second - pg.y * scale, scale, inPopup = true)
+            addTree(layers, popup.surface, at.first - pg.x * scale, at.second - pg.y * scale, scale, inPopup = true)
         }
         return layers
     }
@@ -239,7 +253,7 @@ class WindowRenderer(
         scale: Float,
         depth: Int = 0,
     ): Pair<Float, Float>? {
-        if (xdg.toplevel === window) return 0f to 0f
+        if (xdg.toplevel === window) return origin
         val popup = xdg.popup ?: return null
         // Parents that loop (a client bug) would recurse forever.
         if (depth >= MAX_NESTING) return null

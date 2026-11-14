@@ -1,0 +1,5 @@
+A tiny icon theme for the Linux desktop's shortcuts (pcmanfm-qt --desktop). It only adds four icons on
+top of Adwaita: a see-through "emblem-important", so shortcuts don't carry the red "!" badge the file
+manager puts on launchers it can't mark trusted (that needs gvfs, not installed), "android-app",
+the icon of Android app shortcuts, "desktop-add", the icon of the "Add shortcut" shortcut, and "desktop-display", the icon of "Display".
+The icons are PNG because Qt here has no SVG support (qt6-svg isn't installed).

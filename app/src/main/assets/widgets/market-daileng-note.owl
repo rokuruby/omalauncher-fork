@@ -1,0 +1,90 @@
+widget "note" {
+  size: 3x3
+  minSize: 2x2
+
+  meta { owl: 6; description: "A terminal-styled sticky note. Type on the tile, tap it to edit lines or lock editing."; version: "1.0"; license: "MIT"; category: "productivity" }
+
+  // Long-press belongs to the home screen, so a tap reveals a pencil in the
+  // corner, and the pencil opens the edit screen. It hides again after a few
+  // seconds. Everything is kept by the launcher; no Linux needed.
+  state lines = ["hello from omarchy", "tap to edit or lock"] persist
+  state locked = false persist
+  state hideAt = 0
+  source now = clock every 1s
+
+  at hideAt { hideAt = 0 }
+
+  onTap: hideAt = hideAt > 0 ? 0 : now + 4
+
+  Box {
+    fill: true
+    align: topEnd
+    Column {
+      gap: 2
+      fill: true
+      Column {
+        gap: 1
+        weight: 1
+        scroll: true
+        for line, i in lines {
+          Text { text: line; font: mono; style: small; color: foreground }
+        }
+      }
+      if !locked {
+        Row {
+          gap: 4
+          align: center
+          Text { text: "❯"; font: mono; color: green; width: 12 }
+          Input { placeholder: "append line"; fontSize: 12; clear: true; weight: 1
+            onSubmit: lines = value == "" ? lines : (lines + [value]).take(200) }
+        }
+      }
+    }
+    Text { text: "✎"; fontSize: 20; color: accent; align: center; size: 36
+      padding: [0, 4]; background: surface; border: 1; borderColor: accent
+      visible: hideAt > 0
+      onTap: { hideAt = 0; screen() } }
+  }
+
+  screen {
+    title: "note"
+    Column {
+      gap: 8
+      fill: true
+      padding: 4
+      Button { text: locked ? "🔓 unlock editing" : "🔒 lock editing"; color: locked ? yellow : accent; onTap: locked = !locked; fill: width }
+      Column {
+        gap: 4
+        weight: 1
+        scroll: true
+        for line, i in lines {
+          Row {
+            gap: 6
+            align: center
+            Text { text: pad(i + 1, 3, " "); font: mono; style: small; color: muted; width: 30 }
+            if locked {
+              Text { text: line; font: mono; weight: 1 }
+            } else {
+              Input { text: line; weight: 1
+                onChange: lines = lines.take(i) + [value] + lines.drop(i + 1) }
+              Button { text: "✕"; color: red; width: 44
+                onTap: lines = lines.take(i) + lines.drop(i + 1) }
+            }
+          }
+        }
+        if !locked {
+          Row {
+            gap: 6
+            align: center
+            Text { text: "❯"; font: mono; color: green; width: 30; align: end }
+            Input { placeholder: "new line"; clear: true; focus: true; weight: 1
+              onSubmit: lines = value == "" ? lines : (lines + [value]).take(200) }
+          }
+        }
+      }
+      if !locked {
+        Button { text: "clear note"; color: red; onTap: lines = [] }
+      }
+    }
+  }
+}

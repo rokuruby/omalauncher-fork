@@ -62,6 +62,22 @@ class ManagedFilesTest {
         assertFalse(File(base, "a.conf").exists())
     }
 
+    @Test fun bringsBackDeletedKeptDefaults() {
+        val kept = { text: String -> Managed.text(File(base, "a.owl"), Policy.Kept) { text } }
+        files.sync(listOf(kept("v1")))
+        File(base, "a.owl").delete()
+        files.sync(listOf(kept("v2")))
+        assertEquals("v2", read("a.owl"))
+        // Edited, it's the user's, as a Seeded default is.
+        File(base, "a.owl").writeText("mine")
+        files.sync(listOf(kept("v3")))
+        assertEquals("mine", read("a.owl"))
+        // Deleted after editing: back as shipped.
+        File(base, "a.owl").delete()
+        files.sync(listOf(kept("v4")))
+        assertEquals("v4", read("a.owl"))
+    }
+
     @Test fun alwaysRewritesOwnedFiles() {
         files.sync(listOf(owned("shim", "v1")))
         File(base, "shim").writeText("broken")

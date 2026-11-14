@@ -1,0 +1,11 @@
+<?xml version="1.0"?>
+<labwc_config>
+  <theme><cornerRadius>8</cornerRadius><titlebar><layout>icon:iconify,max,close</layout></titlebar></theme>
+  <keyboard>
+    <default />
+    <keybind key="W-space"><action name="Execute" command="fuzzel" /></keybind>
+    <keybind key="W-Return"><action name="Execute" command="foot" /></keybind>
+    <keybind key="W-e"><action name="Execute" command="pcmanfm-qt" /></keybind>
+  </keyboard>
+  <mouse><default /></mouse>
+</labwc_config>

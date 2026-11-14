@@ -1,0 +1,48 @@
+widget "adb" {
+  size: 2x2
+  meta { description: "Connects Linux to the phone's own adb (Wireless debugging), pairs with a code, and keeps adb on after Wi-Fi goes off until reboot (where the phone allows it)"; owl: 13 }
+
+  requires { pacman: ["android-tools"] }
+
+  source st = cmd("adb-phone status") every 15s json timeout 20s
+  state msg = ""
+
+  let on = st != null && st.state == "connected"
+  let dot = on ? "●" : "○"
+  let line = st == null ? "checking…" : on ? (st.data ? "connected · stays on without Wi-Fi" : "connected · drops if Wi-Fi goes off") : (st.wifi ? "Wireless debugging is on · tap Connect" : "off · turn on Wireless debugging")
+
+  Column {
+    fill: true
+    gap: 6
+    padding: [10, 8]
+    Row {
+      gap: 8
+      align: center
+      Text { text: dot; color: on ? green : muted; fontSize: 18 }
+      Column {
+        gap: 0
+        weight: 1
+        Text { text: "ADB"; style: title }
+        Text { text: msg != "" ? msg : line; style: small; color: muted; maxLines: 2 }
+      }
+    }
+    Row {
+      gap: 6
+      Text { text: on ? "Refresh" : "Connect"; style: small; color: background; background: accent; padding: [8, 6]; radius: 12; align: center; weight: 1; onTap: { haptic(); msg = "connecting…"; run("adb-phone connect > ~/.cache/adb-phone.msg 2>&1") } }
+      if on {
+        Text { text: "Off"; style: small; color: background; background: red; padding: [8, 6]; radius: 12; align: center; weight: 1; onTap: { haptic(); msg = ""; run("adb-phone off > ~/.cache/adb-phone.msg 2>&1") } }
+      }
+    }
+    if on && !st.data {
+      Row {
+        Text { text: "Keep on without Wi-Fi"; style: small; color: background; background: yellow; padding: [8, 6]; radius: 12; align: center; weight: 1; onTap: { haptic(); msg = "keeping adb on without Wi-Fi…"; run("adb-phone keep > ~/.cache/adb-phone.msg 2>&1") } }
+      }
+    }
+    if !on {
+      Input { placeholder: "pairing code (pair screen open)"; clear: true; onSubmit: { msg = "pairing…"; run("adb-phone pair ${sh(value)} > ~/.cache/adb-phone.msg 2>&1") } }
+    }
+  }
+
+  source result = file("~/.cache/adb-phone.msg")
+  on result { if value != null && value != "" { msg = trim(value) } }
+}

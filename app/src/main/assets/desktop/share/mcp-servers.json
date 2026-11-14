@@ -1,0 +1,62 @@
+{
+  "_about": "MCP servers agent-mcp adds to each coding agent when missing (never overwriting one you have). Claude Code: `claude mcp` format, user scope. OpenCode: opencode.json `mcp` format. Edit /usr/local/share/omalauncher/mcp-servers.json's source in the fork to change them.",
+  "claude": {
+    "playwright": {
+      "type": "stdio",
+      "command": "npx",
+      "args": [
+        "-y",
+        "@playwright/mcp@latest",
+        "--browser",
+        "chromium",
+        "--executable-path",
+        "/usr/bin/chromium",
+        "--headless",
+        "--no-sandbox",
+        "--isolated"
+      ],
+      "env": {}
+    },
+    "osm": {
+      "type": "stdio",
+      "command": "uvx",
+      "args": [
+        "--with",
+        "mcp<2",
+        "osm-mcp-server"
+      ],
+      "env": {
+        "UV_LINK_MODE": "copy"
+      }
+    }
+  },
+  "opencode": {
+    "playwright": {
+      "type": "local",
+      "command": [
+        "npx",
+        "-y",
+        "@playwright/mcp@latest",
+        "--browser",
+        "chromium",
+        "--executable-path",
+        "/usr/bin/chromium",
+        "--headless",
+        "--no-sandbox",
+        "--isolated"
+      ]
+    },
+    "osm": {
+      "type": "local",
+      "command": [
+        "uvx",
+        "--with",
+        "mcp<2",
+        "osm-mcp-server"
+      ],
+      "environment": {
+        "UV_LINK_MODE": "copy"
+      }
+    }
+  }
+}

@@ -1,0 +1,53 @@
+widget "gemma server" {
+  // Turns the launcher's Gemma server for Linux (127.0.0.1:9379, what gemma-code uses) on or off. Voice's Gemma
+  // doesn't need it. It shows what the server answers, not just the switch: on, and whether the model is loaded.
+  // A tap only sets tapAt/want; the `sw` source then runs gemma-tile-switch (once per tap), which flips the
+  // server and waits for it. Taps are logged in ~/.cache/gemma-tap.log.
+  meta { owl: 12; description: "Turns the Gemma 4 server for Linux on or off, and shows whether it's running"; version: "1.2"; license: "MIT"; category: "system" }
+
+  page: 1
+  size: 2x1
+  minSize: 2x1
+
+  source health = cmd("curl -s -m 2 http://127.0.0.1:9379/ || echo '{}'") json every 5s
+  source now = clock every 1s
+  state want = "none"
+  state tapAt = 0
+  source sw = cmd("gemma-tile-switch ${sh(want)} ${tapAt}") json every 10m timeout 40s
+
+  let on = health.status == "ok"
+  let loaded = health.loaded
+  let nowState = on ? "on" : "off"
+  let handled = tapAt != 0 && sw != null && sw.id == tapAt
+  let switching = tapAt != 0 && !handled && now - tapAt < 60
+  let failed = (handled && sw.status != want) || (tapAt != 0 && !handled && now - tapAt >= 60)
+
+  onTap: {
+    haptic()
+    want = on ? "off" : "on"
+    tapAt = now
+  }
+  on sw { refresh() }
+
+  Row {
+    fill: true
+    gap: 8
+    padding: [4, 8]
+    Box {
+      size: 12
+      radius: 6
+      background: switching ? muted : (on ? green : red)
+    }
+    Column {
+      weight: 1
+      gap: 0
+      Text { text: "Gemma server"; style: muted; maxLines: 1 }
+      Text {
+        text: switching ? "turning ${want}…" : (failed ? "couldn't turn ${want}" : (on ? (loaded != null ? "on · ${lower(loaded)}" : "on · idle") : "off"))
+        color: switching ? muted : (failed ? red : (on ? green : foreground))
+        maxLines: 1
+      }
+      Text { text: "server is ${nowState}"; style: muted; maxLines: 1; visible: switching || failed }
+    }
+  }
+}

@@ -3,7 +3,7 @@ keybar "terminal key bar" {
   // yours to change: ask your agent to edit them. .stock-keybar.owl next to it is this file as the launcher ships it, kept
   // up to date: compare the two to see what changed in a newer launcher. If this file is gone or doesn't compile, the
   // stock keys show instead.
-  meta { description: "The key bar over the keyboard while typing in a terminal: esc, tab, ctrl, alt, the arrows, copy, paste and photos"; version: "1.3"; license: "MIT"; category: "system"; owl: 16 }
+  meta { description: "The key bar over the keyboard while typing in a terminal: esc, tab, ctrl, alt, the arrows, copy, paste and photos and dictation"; version: "1.3-mic"; license: "MIT"; category: "system"; owl: 16 }
   // The launcher's chevron; currentColor takes the tint.
   asset chevron = base64"PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI+PHBhdGggZmlsbD0iY3VycmVudENvbG9yIiBkPSJNNy40MSwxNS40MUwxMiwxMC44M2w0LjU5LDQuNThMMTgsMTRsLTYsLTYgLTYsNnoiLz48L3N2Zz4="
   // Material Design Icons' copy, paste and image, for the clipboard keys and the one that pastes photos.
@@ -21,6 +21,9 @@ keybar "terminal key bar" {
     zh { copy: "复制"; paste: "粘贴"; photos: "照片" }
   }
   source kb = android.modifiers
+  // Dictation: the mic key at the right listens until tapped again, then types what was heard into the terminal.
+  source said = android.speech
+  on said.final { if value { typeText(value + " ") } }
   // The key under the finger, drawn pressed.
   state down = ""
 
@@ -113,6 +116,25 @@ keybar "terminal key bar" {
     }
   }
 
+  // The mic key, as tall as both rows: red while listening, a tap to start and to stop.
+  component Mic() {
+    let on = said.listening ?? false
+    Box {
+      width: 40
+      fill: height
+      padding: 3
+      Box {
+        fill: true
+        align: center
+        radius: 8 * corners
+        background: on ? red : surface
+        onPress: haptic()
+        onTap: speech("toggle")
+        Text { text: on ? "⏹" : "🎤"; fontSize: 18; align: center }
+      }
+    }
+  }
+
   // Framed like the tiles above it, by the terminal key bar's gaps and border width in settings › style: gapsOut to the
   // screen's sides and the keyboard. 6 between the keys and to the frame, half of it around each key.
   Column {
@@ -125,25 +147,38 @@ keybar "terminal key bar" {
       border: borderWidth
       borderColor: border
       radius: 12 * corners
-      for row in rows {
-        Row {
-          height: 40
+      // While listening, what's been heard so far; on an error, why it couldn't listen.
+      if (said.listening ?? false) || said.error != null {
+        Text { text: said.error ?? (said.text ? said.text : "listening…"); padding: [6, 3]; maxLines: 2; fontSize: 13; color: said.error != null ? red : muted }
+      }
+      Row {
+        height: 80
+        gap: 0
+        Column {
+          weight: 1
           gap: 0
-          for k in row {
-            Box {
-              weight: 1
-              fill: height
-              padding: 3
-              if k.latch != null {
-                Latched { k: k }
-              } else if k.images ?? false {
-                Images { k: k }
-              } else {
-                Plain { k: k }
+          for row in rows {
+            Row {
+              height: 40
+              gap: 0
+              for k in row {
+                Box {
+                  weight: 1
+                  fill: height
+                  padding: 3
+                  if k.latch != null {
+                    Latched { k: k }
+                  } else if k.images ?? false {
+                    Images { k: k }
+                  } else {
+                    Plain { k: k }
+                  }
+                }
               }
             }
           }
         }
+        Mic {}
       }
     }
   }

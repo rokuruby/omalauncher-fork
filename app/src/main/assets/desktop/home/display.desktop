@@ -1,0 +1,6 @@
+[Desktop Entry]
+Type=Application
+Name=Display
+Comment=Switch the desktop's resolution and scale
+Exec=desktop-display
+Icon=desktop-display

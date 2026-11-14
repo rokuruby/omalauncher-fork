@@ -1,0 +1,28 @@
+widget "desktop" {
+  size: 2x1
+  meta { description: "Starts the labwc Linux desktop in its own window; tap again to stop it"; owl: 13 }
+
+  requires { pacman: ["labwc", "waybar", "fuzzel", "foot", "pcmanfm-qt", "swaybg", "wlr-randr", "procps-ng", "adwaita-icon-theme", "adwaita-icon-theme-legacy", "scrcpy", "android-tools"] }
+
+  source up = cmd("pgrep -x labwc >/dev/null && echo yes || echo no") every 5s
+
+  let running = up == "yes"
+
+  Row {
+    fill: true
+    gap: 8
+    align: center
+    padding: [10, 6]
+    onTap: {
+      haptic()
+      if running { run("pkill -x labwc") } else { run("setsid nohup linux-desktop >/dev/null 2>&1 </dev/null &") }
+    }
+    Text { text: "🖥"; fontSize: 22 }
+    Column {
+      gap: 0
+      weight: 1
+      Text { text: "Desktop"; style: title }
+      Text { text: running ? "running · tap to stop" : "tap to start"; style: small; color: running ? accent : muted }
+    }
+  }
+}

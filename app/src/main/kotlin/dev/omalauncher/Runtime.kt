@@ -21,12 +21,15 @@ import dev.omalauncher.linux.Agent
 import dev.omalauncher.linux.AgentStore
 import dev.omalauncher.linux.AudioBridge
 import dev.omalauncher.linux.Bootstrap
+import dev.omalauncher.linux.DesktopKit
 import dev.omalauncher.linux.EDIT_COMMAND
 import dev.omalauncher.linux.FILES_COMMAND
 import dev.omalauncher.linux.VOICE_COMMAND
 import dev.omalauncher.linux.Gpu
 import dev.omalauncher.linux.LinuxApp
+import dev.omalauncher.linux.LinuxDns
 import dev.omalauncher.linux.OpenBridge
+import dev.omalauncher.linux.PhoneBridge
 import dev.omalauncher.linux.Pacman
 import dev.omalauncher.linux.Proot
 import dev.omalauncher.linux.SystemUpdates
@@ -63,6 +66,9 @@ import dev.omalauncher.widgets.WidgetSpec
 import dev.omalauncher.widgets.app
 import dev.omalauncher.widgets.lang.Program
 import dev.omalauncher.widgets.runtime.Dictation
+import dev.omalauncher.widgets.runtime.PhoneLocation
+import dev.omalauncher.widgets.runtime.PhoneCalendar
+import dev.omalauncher.widgets.runtime.NotificationDots
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -73,6 +79,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import dev.omalauncher.local.Gemma
 import dev.omalauncher.local.LocalModel
 import dev.omalauncher.local.OpenAiServer
 import java.io.File
@@ -103,24 +110,70 @@ class Runtime(
     val themes = ThemeStore(context, proot, style, isLinux = { linux }, onConfigChanged = ::syncGuest)
     private val audio = AudioBridge(proot)
     private val openBridge = OpenBridge(context, proot, onOpenFiles = ::openFiles, onOpenVoice = ::openVoice, onEdit = ::edit)
-    val agents = AgentStore(proot, onChanged = ::syncGuest)
+    val agents = AgentStore(proot, text = { id, arg -> context.getString(id, arg) }, onChanged = ::syncGuest)
     val pacman = Pacman(context, proot)
+
+    /** This fork's desktop, adb and rish commands and the desktop's settings; see [DesktopKit]. */
+    private val desktopKit = DesktopKit(context, proot)
     val widgets = WidgetEngine(context, proot, this)
 
     /** Widgets' speech(...) and android.speech. */
     val dictation = Dictation(context)
 
+    /** Widgets' location("request") and android.location. */
+    val location = PhoneLocation(context)
+
+    /** Widgets' android.calendar, calendar("request") and calendar("open"). */
+    val calendar = PhoneCalendar(context)
+
+    /** The phone's folders the user let Linux reach: in Files, and through `omalauncher`. */
+    val phoneFolders = PhoneFolders(context)
+
+    /** `omalauncher` in the guest (and `phone`, its old name): location, calendar and AirPods for agents, as far as widgets were allowed them; the phone folders. */
+    private val phoneBridge by lazy { PhoneBridge(context, proot, location, calendar, { widgets.airpods }, phoneFolders, scope) }
+
     /** The voice screen's replies, in the phone's voice. */
     val speaker = Speaker(context)
 
     /** A spoken conversation with a coding agent: the voice screen's (VoiceActivity). */
-    val voice by lazy { VoiceSession(context, proot, agents, speaker, local) }
+    private val voiceSession = lazy { VoiceSession(context, proot, agents, speaker, local) }
+    val voice by voiceSession
+
+    init {
+        // Not started just for this: a Voice that never ran has nothing to stop.
+        agents.release = { agent -> voiceSession.isInitialized() && voice.release(agent.bin) }
+    }
 
     /** Gemma 4 E2B in the launcher: Voice's local agent, and an OpenAI-compatible server for Linux (gemma-code). */
     val local = LocalModel(context) { proot.home }
-    private val localServer = OpenAiServer(local).also { it.start() }
+    private val localServer =
+        OpenAiServer(local).also { server ->
+            // On or off as ~/.config/omalauncher/gemma-server says (the home tile, gemma-server on|off): checked
+            // every 2 s, a file's read being cheap.
+            thread(isDaemon = true, name = "gemma-switch") {
+                var running: Boolean? = null
+                while (true) {
+                    val wanted = Gemma.serverWanted(proot.home)
+                    if (wanted != running) {
+                        // Switched off: Gemma is unloaded too, unless a Voice call is using it.
+                        if (wanted) {
+                            local.hold("server")
+                            server.start()
+                        } else {
+                            server.stop()
+                            local.letGo("server")
+                        }
+                        running = wanted
+                    }
+                    Thread.sleep(2000)
+                }
+            }
+        }
     val updates = SystemUpdates(proot, pacman, agents)
     val gpu = Gpu(context, proot, pacman)
+
+    /** The guest's resolv.conf, on the phone's DNS servers while Linux is up. */
+    private val dns = LinuxDns(context, proot.rootfs)
 
     /** The launcher's own provided files (default widgets, their docs); see [Provisioner]. */
     private val launcherFiles = Provisioner(proot.filesDir, LauncherData.LAUNCHER_MANIFEST, listOf(widgets::managed, style::managed))
@@ -134,11 +187,13 @@ class Runtime(
                 { defaultApps(proot.applications) },
                 { bundledIcons(context, proot.home) },
                 openBridge::managed,
+                { phoneBridge.managed() },
                 proot::managed,
                 pacman::managed,
                 agents::managed,
                 themes::managed,
                 widgets::guestManaged,
+                desktopKit::managed,
             ),
         )
     val bootstrap = Bootstrap(context, proot, agents, pacman, provisioner)
@@ -342,6 +397,8 @@ class Runtime(
                 server.start()
                 proot.procShim.start()
                 openBridge.start()
+                phoneBridge.start()
+                dns.start()
             }
         } else {
             // Linux installed again: its new home has no foot-font.ini yet.
@@ -522,6 +579,12 @@ class Runtime(
         androidKeyOf(shortcut)?.let { androidApps.labels[it] }
             ?: shortcut.owl?.let { widgets.specs.app(it)?.name }
             ?: shortcut.label
+
+    /** Whether a pinned Android app or shortcut has a notification dot. */
+    fun hasDot(shortcut: Shortcut) =
+        shortcut.component?.let { NotificationDots.has(it.packageName, shortcut.profile) }
+            ?: shortcut.androidShortcut?.let { NotificationDots.has(it.packageName, shortcut.profile, it.id) }
+            ?: false
 
     /** A pinned Android app's or shortcut's key in [androidApps]; null for a Linux app. */
     private fun androidKeyOf(shortcut: Shortcut) =

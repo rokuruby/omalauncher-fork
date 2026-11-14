@@ -47,11 +47,14 @@ jobs:
       - name: Build
         run: ./gradlew :app:assembleRelease
 
-      # Named for its version and what this fork adds, so the APKs in Download tell themselves apart.
+      # Named for the original launcher's version, this build's number and its newest change, e.g.
+      # omalauncher-1.0.0-b66-displaymenu.apk. (Listing every feature made the name longer than the
+      # 255 characters a file name may have.) README.md's "Versions" lists what each build contains.
       - name: Name the APK
         run: |
           version=$(sed -n 's/.*versionName = "\(.*\)".*/\1/p' app/build.gradle.kts)
-          name="omalauncher-$version-androidwidgets-fileaccess-chinesevoice-localgemma4-gpufallback-fastcode-voicefiles"
+          code=$(sed -n 's/.*versionCode = \([0-9]*\).*/\1/p' app/build.gradle.kts)
+          name="omalauncher-$version-b$code-upstream140"
           mv app/build/outputs/apk/release/app-release.apk "$name.apk"
           echo "APK_NAME=$name" >> "$GITHUB_ENV"
 

@@ -1,0 +1,9 @@
+* { font-family: "DejaVu Sans", sans-serif; font-size: 14px; }
+window#waybar { background: rgba(24,25,38,0.95); color: #cad3f5; }
+#custom-apps { background: #8aadf4; color: #1e2030; border-radius: 6px; margin: 4px; padding: 0 8px; }
+#taskbar button { color: #cad3f5; padding: 0 6px; }
+#taskbar button.active { background: #363a4f; border-radius: 6px; }
+#clock { padding: 0 10px; }
+#custom-exit { background: #ed8796; color: #1e2030; border-radius: 6px; margin: 4px; padding: 0 8px; }
+#custom-phone { background: #a6da95; color: #1e2030; border-radius: 6px; margin: 4px 4px 4px 0; padding: 0 8px; }
+#custom-display { background: #363a4f; color: #cad3f5; border-radius: 6px; margin: 4px; padding: 0 8px; }

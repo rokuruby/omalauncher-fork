@@ -1,0 +1,6 @@
+[Desktop Entry]
+Type=Application
+Name=Add shortcut
+Comment=Put a Linux or Android app on the desktop
+Exec=desktop-shortcut
+Icon=desktop-add

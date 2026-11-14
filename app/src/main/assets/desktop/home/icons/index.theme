@@ -1,0 +1,19 @@
+[Icon Theme]
+Name=DesktopIcons
+Comment=Adwaita plus desktop shortcut icons
+Inherits=Adwaita,AdwaitaLegacy,hicolor
+Directories=96x96/emblems,96x96/apps
+
+[96x96/emblems]
+Size=96
+MinSize=8
+MaxSize=512
+Type=Scalable
+Context=Emblems
+
+[96x96/apps]
+Size=96
+MinSize=8
+MaxSize=512
+Type=Scalable
+Context=Applications

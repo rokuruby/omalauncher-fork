@@ -36,23 +36,38 @@ class OpenAiServer(
     private val model: LocalModel,
 ) {
     private val pool = Executors.newCachedThreadPool { r -> Thread(r, "gemma-http").apply { isDaemon = true } }
-    private var socket: ServerSocket? = null
+    @Volatile private var socket: ServerSocket? = null
+
+    @Volatile private var on = false
 
     /** Starts listening; a port already taken (litert-lm serve running in Linux) leaves that one serving. */
+    @Synchronized
     fun start() {
-        if (socket != null) return
+        if (on) return
+        on = true
         Thread({
             val s =
                 runCatching { ServerSocket(Gemma.PORT, 16, InetAddress.getByName("127.0.0.1")) }.getOrElse {
                     Log.w(TAG, "can't listen on ${Gemma.PORT}", it)
+                    on = false
                     return@Thread
                 }
+            // Turned off while it was starting.
+            if (!on) return@Thread s.close()
             socket = s
             while (!s.isClosed) {
                 val c = runCatching { s.accept() }.getOrNull() ?: continue
                 pool.execute { runCatching { c.use(::serve) }.onFailure { Log.w(TAG, "request failed", it) } }
             }
         }, "gemma-listen").apply { isDaemon = true }.start()
+    }
+
+    /** Stops listening: nothing can reach the model through it until [start]. A reply under way still finishes. */
+    @Synchronized
+    fun stop() {
+        on = false
+        socket?.let { runCatching { it.close() } }
+        socket = null
     }
 
     private fun serve(c: Socket) {
@@ -66,7 +81,7 @@ class OpenAiServer(
                 val m = JSONObject().put("id", Gemma.MODEL_ID).put("object", "model").put("created", 0).put("owned_by", "omalauncher")
                 respond(out, 200, JSONObject().put("object", "list").put("data", JSONArray().put(m)))
             }
-            method == "GET" && path == "/" -> respond(out, 200, JSONObject().put("status", "ok").put("model", Gemma.MODEL_ID).put("present", model.present))
+            method == "GET" && path == "/" -> respond(out, 200, JSONObject().put("status", "ok").put("model", Gemma.MODEL_ID).put("present", model.present).put("loaded", model.backend ?: JSONObject.NULL))
             method == "POST" && (path == "/v1/chat/completions" || path == "/chat/completions") -> {
                 val body = readBody(input, headers)
                 val req = runCatching { JSONObject(body.toString(Charsets.UTF_8)) }.getOrElse { return respond(out, 400, problem("the body isn't JSON")) }

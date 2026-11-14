@@ -1,0 +1,11 @@
+{
+  "layer": "top", "position": "bottom", "height": 34,
+  "modules-left": ["custom/apps", "custom/phone", "wlr/taskbar"],
+  "modules-right": ["custom/display", "clock", "custom/exit"],
+  "custom/apps": { "format": " Apps ", "on-click": "fuzzel", "tooltip": false },
+  "custom/phone": { "format": " Phone ", "on-click": "phone-apps", "on-click-right": "phone-window stop", "tooltip": false },
+  "wlr/taskbar": { "format": "{icon} {title:.18}", "icon-size": 18, "on-click": "minimize-raise", "on-click-middle": "close" },
+  "custom/display": { "format": " Display ", "on-click": "desktop-display", "tooltip": false },
+  "clock": { "format": "{:%a %d %b  %H:%M}" },
+  "custom/exit": { "format": " ⏻ Exit ", "on-click": "labwc --exit", "tooltip": false }
+}

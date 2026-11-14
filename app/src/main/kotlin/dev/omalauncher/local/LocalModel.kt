@@ -22,7 +22,9 @@ import java.util.concurrent.TimeUnit
  * Gemma in the launcher's own process: loaded on first use, on the GPU when the phone lets it and on the CPU
  * otherwise, and unloaded after [IDLE_MS] unused, as it takes gigabytes. One turn at a time ([turn]), Voice's or
  * Linux's; one conversation kept between turns ([conversation]), so a coding agent that sends its whole history
- * again only has the new part read.
+ * again only has the new part read. It's also unloaded as soon as no one holds it ([hold], [letGo]): the server for
+ * Linux while it's switched on, a Voice call with Gemma while it lasts. Kept loaded, it pushes the phone's other apps
+ * into swap and the phone stays laggy until it goes.
  */
 class LocalModel(
     private val context: Context,
@@ -40,6 +42,23 @@ class LocalModel(
 
     private var kept: Conversation? = null
     private var keptKey: String? = null
+
+    /** Who needs the model kept loaded between turns: "server", or a Voice call. */
+    private val holders = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+
+    /** [who] will use the model again soon: it stays loaded (until [IDLE_MS] unused). */
+    fun hold(who: String) {
+        holders += who
+    }
+
+    /**
+     * [who] is done with the model: when no one else holds it, it's unloaded now (after a turn under way), not
+     * [IDLE_MS] later.
+     */
+    fun letGo(who: String) {
+        if (!holders.remove(who) || holders.isNotEmpty()) return
+        timer.execute { release("$who ended, no one else using it") }
+    }
 
     val present get() = Gemma.present(home())
 
@@ -198,16 +217,38 @@ class LocalModel(
     }
 
     private fun idle() {
-        if (!lock.tryAcquire()) return
+        // A turn under way: try again once it's had time to end, rather than never.
+        if (!lock.tryAcquire()) {
+            unload = timer.schedule(Runnable { idle() }, 60_000L, TimeUnit.MILLISECONDS)
+            return
+        }
         try {
-            drop()
-            engine?.let { runCatching { it.close() } }
-            engine = null
-            backend = null
-            note("unloaded after ${IDLE_MS / 60000} minutes unused")
+            free("after ${IDLE_MS / 60000} minutes unused")
         } finally {
             lock.release()
         }
+    }
+
+    /** Unloads now, waiting for a turn under way, unless someone took hold of it again meanwhile. */
+    private fun release(why: String) {
+        lock.acquire()
+        try {
+            if (holders.isEmpty()) free(why)
+        } finally {
+            lock.release()
+        }
+    }
+
+    /** With [lock] held: closes the engine, giving its gigabytes (memory and GPU) back to the phone. */
+    private fun free(why: String) {
+        unload?.cancel(false)
+        unload = null
+        if (engine == null) return
+        drop()
+        engine?.let { runCatching { it.close() } }
+        engine = null
+        backend = null
+        note("unloaded: $why")
     }
 
     companion object {

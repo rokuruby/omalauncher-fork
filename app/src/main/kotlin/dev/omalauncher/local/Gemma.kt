@@ -30,6 +30,32 @@ object Gemma {
     /** The context the engine is opened with: room for a coding agent's long instructions. */
     const val MAX_TOKENS = 32768
 
+    /** In the guest home: "off" turns the server for Linux off (the home tile and `gemma-server off` write it). */
+    const val SWITCH_PATH = ".config/omalauncher/gemma-server"
+
+    /** `gemma-server on|off|status`, in Linux. */
+    const val SERVER_COMMAND = "gemma-server"
+
+    /** Whether the server for Linux should run: on unless the switch says off. */
+    fun serverWanted(home: File) = runCatching { File(home, SWITCH_PATH).readText().trim() }.getOrNull() != "off"
+
+    val serverScript: String
+        get() =
+            """
+            #!/bin/sh
+            # Written by the launcher: turns its Gemma server for Linux (127.0.0.1:$PORT) on or off, and says which.
+            f="${'$'}HOME/$SWITCH_PATH"
+            case "${'$'}1" in
+              on|off) mkdir -p "${'$'}(dirname "${'$'}f")" && echo "${'$'}1" > "${'$'}f" && sleep 3 ;;
+              status|"") ;;
+              *) echo "usage: $SERVER_COMMAND [on|off|status]"; exit 2 ;;
+            esac
+            if curl -s -m 3 http://127.0.0.1:$PORT/ >/dev/null 2>&1; then echo on; else echo off; fi
+            """.trimIndent() + "\n"
+
+    /** In the guest home: gemma-code's own OpenCode config, sessions and history, apart from the user's OpenCode. */
+    const val OWN_HOME = ".local/share/gemma-code"
+
     /** The coding agent's command in Linux: OpenCode on this model. */
     const val COMMAND = "gemma-code"
 
@@ -57,7 +83,10 @@ object Gemma {
             val tools = JSONObject()
             for (t in OFF_TOOLS) tools.put(t, false)
             for (t in ON_TOOLS) tools.put(t, true)
-            val agent = JSONObject().put("mode", "primary").put("description", "Gemma on this phone").put("prompt", AGENT_PROMPT).put("tools", tools)
+            // Low temperature: the server's default (1.0, Google's for chat) makes a small model's tool calls erratic.
+            val agent =
+                JSONObject().put("mode", "primary").put("description", "Gemma on this phone").put("prompt", AGENT_PROMPT)
+                    .put("temperature", AGENT_TEMPERATURE).put("tools", tools)
             val agents = JSONObject().put("gemma", agent).put("title", JSONObject().put("disable", true))
             return JSONObject()
                 .put("provider", JSONObject().put("litert", provider))
@@ -72,12 +101,14 @@ object Gemma {
         "You are a coding assistant running on the user's phone, in a Linux terminal. Use the tools to read, write and edit " +
             "files and to run shell commands. Call one tool at a time and wait for its result. Keep answers short and plain. " +
             "Before changing or deleting anything important, say what you will do. " +
-            // Without these, Gemma ran ls in /root when asked about /, and made /root/sdcard/Download/Phone of
-            // /sdcard/Download/My notes.
+            // Without these, Gemma ran ls in /root when asked about /, and turned a path with a space in it into a
+            // relative one under /root.
             "Paths: use a path exactly as the user gives it. A path starting with / is absolute: never put anything in " +
             "front of it. In shell commands, put double quotes around every path, because paths can contain spaces. To " +
             "see what is in a folder, run ls -la on that exact folder. Your working folder is /root, and the phone's " +
             "Download folder is /sdcard/Download."
+
+    private const val AGENT_TEMPERATURE = 0.4
 
     private val ON_TOOLS = listOf("read", "write", "edit", "shell", "glob")
 
@@ -126,9 +157,26 @@ object Gemma {
               case "${'$'}a" in [nN]*) exit 1 ;; esac
               (download) || exit 1
             fi
+            if ! curl -s -m 3 http://127.0.0.1:$PORT/ >/dev/null 2>&1; then
+              printf 'The Gemma server is off. Turn it on? [Y/n] '
+              read -r a || exit 1
+              case "${'$'}a" in [nN]*) exit 1 ;; esac
+              $SERVER_COMMAND on >/dev/null
+            fi
             if ! command -v opencode >/dev/null 2>&1; then
               echo "OpenCode isn't installed: install Gemma 4 (local) or OpenCode in the launcher's Agents."; exit 1
             fi
+            # OpenCode's own config, sessions and history for Gemma, apart from the user's OpenCode: its global config
+            # (MCP servers, other providers) and ~/.claude instructions would only make Gemma's prompt longer.
+            # mise keeps its own folders, as opencode itself is a mise shim.
+            export MISE_DATA_DIR="${'$'}{MISE_DATA_DIR:-${'$'}HOME/.local/share/mise}"
+            export MISE_CONFIG_DIR="${'$'}{MISE_CONFIG_DIR:-${'$'}HOME/.config/mise}"
+            export MISE_STATE_DIR="${'$'}{MISE_STATE_DIR:-${'$'}HOME/.local/state/mise}"
+            g="${'$'}HOME/$OWN_HOME"
+            export XDG_CONFIG_HOME="${'$'}g/config" XDG_DATA_HOME="${'$'}g/data" XDG_STATE_HOME="${'$'}g/state"
+            export OPENCODE_DISABLE_CLAUDE_CODE=1
+            mkdir -p "${'$'}XDG_CONFIG_HOME/opencode"
+            [ -e "${'$'}XDG_CONFIG_HOME/opencode/tui.json" ] || echo '{"theme":"system"}' > "${'$'}XDG_CONFIG_HOME/opencode/tui.json"
             export OPENCODE_CONFIG_CONTENT=${shellQuote(openCodeConfig)}
             exec opencode --standalone "${'$'}@"
             """.trimIndent() + "\n"
